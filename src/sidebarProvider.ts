@@ -2,16 +2,21 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProjectContextService } from './projectContext';
 import { TerminalService } from './terminalService';
+import { FileNavigationService } from './fileNavigation';
 
 export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'hermesSidebar';
   private view?: vscode.WebviewView;
   private terminalService?: TerminalService;
+  private fileNavigation?: FileNavigationService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly projectContext?: ProjectContextService
-  ) {}
+    private readonly projectContext?: ProjectContextService,
+    fileNavigation?: FileNavigationService
+  ) {
+    this.fileNavigation = fileNavigation;
+  }
 
   public setTerminalService(service: TerminalService) {
     this.terminalService = service;
@@ -48,6 +53,24 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'cancelCommand':
           this.terminalService?.cancelCommand(message.id);
+          break;
+        case 'openFile':
+          this.handleOpenFile(message.filePath, message.line, message.character);
+          break;
+        case 'revealInExplorer':
+          this.handleRevealInExplorer(message.filePath);
+          break;
+        case 'listFiles':
+          this.handleListFiles(message.filter, message.limit);
+          break;
+        case 'searchFiles':
+          this.handleSearchFiles(message.query, message.limit);
+          break;
+        case 'getOpenFiles':
+          this.handleGetOpenFiles();
+          break;
+        case 'switchEditor':
+          this.handleSwitchEditor(message.direction);
           break;
         default:
           console.log(`Unknown message: ${message.command}`);
@@ -117,6 +140,71 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // --- File navigation handlers ---
+
+  private async handleOpenFile(filePath: string, line?: number, character?: number) {
+    if (!this.fileNavigation) return;
+    const opened = await this.fileNavigation.openFile(filePath, { line, character, preview: false });
+    this.view?.webview.postMessage({ command: 'fileOpenResult', filePath, success: opened });
+  }
+
+  private async handleRevealInExplorer(filePath: string) {
+    if (!this.fileNavigation) return;
+    const revealed = await this.fileNavigation.revealInExplorer(filePath);
+    this.view?.webview.postMessage({ command: 'revealResult', filePath, success: revealed });
+  }
+
+  private async handleListFiles(filter?: string, limit?: number) {
+    if (!this.fileNavigation) return;
+    const maxFiles = limit ?? 200;
+    const files = await this.fileNavigation.listWorkspaceFiles(undefined, undefined, maxFiles);
+    const filtered = filter
+      ? files.filter((f) => f.fileName.toLowerCase().includes(filter.toLowerCase()))
+      : files;
+    const fileData = filtered.map((f) => ({
+      fsPath: f.fsPath,
+      relativePath: f.relativePath,
+      fileName: f.fileName,
+      language: f.language,
+      size: f.size,
+    }));
+    this.view?.webview.postMessage({ command: 'workspaceFiles', files: fileData });
+  }
+
+  private async handleSearchFiles(query: string, limit?: number) {
+    if (!this.fileNavigation) return;
+    const files = await this.fileNavigation.searchFiles(query, limit ?? 20);
+    this.view?.webview.postMessage({ command: 'searchResults', files: files.map((f) => ({
+      fsPath: f.fsPath,
+      relativePath: f.relativePath,
+      fileName: f.fileName,
+      language: f.language,
+    })) });
+  }
+
+  private handleGetOpenFiles() {
+    if (!this.fileNavigation || !this.view) return;
+    const files = this.fileNavigation.getOpenFiles();
+    const active = this.fileNavigation.getActiveFile();
+    this.view.webview.postMessage({
+      command: 'openFiles',
+      files: files.map((f) => ({
+        fsPath: f.fsPath,
+        relativePath: f.relativePath,
+        fileName: f.fileName,
+        language: f.language,
+      })),
+      activeFile: active
+        ? { fsPath: active.fsPath, relativePath: active.relativePath, fileName: active.fileName }
+        : null,
+    });
+  }
+
+  private async handleSwitchEditor(direction: 'next' | 'previous') {
+    if (!this.fileNavigation) return;
+    await this.fileNavigation.switchEditor(direction);
+  }
+
   private getHtml(webview: vscode.Webview): string {
     const stylesUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'assets', 'sidebar.css')
@@ -158,6 +246,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       <button class="nav-item" data-tab="terminal" title="Run Hermes CLI commands">
         <span class="nav-icon">&#9608;</span>
         <span class="nav-label">Terminal</span>
+      </button>
+      <button class="nav-item" data-tab="files" title="Workspace files">
+        <span class="nav-icon">&#128193;</span>
+        <span class="nav-label">Files</span>
       </button>
       <button class="nav-item" data-tab="sessions" title="Session history">
         <span class="nav-icon">&#8984;</span>
@@ -262,6 +354,34 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         </div>
       </section>
 
+      <section id="tab-files" class="tab-content">
+        <div class="file-nav-container">
+          <div class="file-nav-header">
+            <h3>Workspace Files</h3>
+            <div class="file-nav-actions">
+              <button id="btn-refresh-files" class="btn-icon" title="Refresh file list">&#8635;</button>
+              <button id="btn-switch-prev" class="btn-icon" title="Previous file">&#8592;</button>
+              <button id="btn-switch-next" class="btn-icon" title="Next file">&#8594;</button>
+            </div>
+          </div>
+          <div class="file-search-container">
+            <input
+              id="file-search-input"
+              type="text"
+              placeholder="Search files..."
+              class="file-search-input"
+              autocomplete="off"
+            />
+          </div>
+          <div id="open-files-bar" class="open-files-bar"></div>
+          <div id="file-list" class="file-list">
+            <div class="empty-state">
+              <p>Loading workspace files...</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="tab-sessions" class="tab-content">
         <div class="empty-state">
           <div class="empty-icon">&#8984;</div>
@@ -338,6 +458,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         if (command === 'clearTerminal') {
           terminalOutput.innerHTML = '';
           commandOutputs.clear();
+        }
+        if (command === 'workspaceFiles') {
+          renderFileList(data.files);
+        }
+        if (command === 'searchResults') {
+          renderFileList(data.files);
+        }
+        if (command === 'openFiles') {
+          renderOpenFilesBar(data.files, data.activeFile);
         }
       });
 
@@ -456,6 +585,104 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
           block.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }
+      }
+
+      // File navigation UI handlers
+      const fileList = document.getElementById('file-list');
+      const fileSearchInput = document.getElementById('file-search-input');
+      const openFilesBar = document.getElementById('open-files-bar');
+
+      // Refresh files button
+      document.getElementById('btn-refresh-files')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'listFiles' });
+      });
+
+      // Switch editor buttons
+      document.getElementById('btn-switch-prev')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'switchEditor', direction: 'previous' });
+      });
+      document.getElementById('btn-switch-next')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'switchEditor', direction: 'next' });
+      });
+
+      // Search files input with debounce
+      let searchTimeout: any = null;
+      if (fileSearchInput) {
+        fileSearchInput.addEventListener('input', () => {
+          clearTimeout(searchTimeout);
+          const query = fileSearchInput.value.trim();
+          if (query.length === 0) {
+            vscodeApi.postMessage({ command: 'listFiles' });
+            return;
+          }
+          searchTimeout = setTimeout(() => {
+            vscodeApi.postMessage({ command: 'searchFiles', query, limit: 20 });
+          }, 300);
+        });
+      }
+
+      // Load files when tab becomes active
+      document.querySelector('[data-tab="files"]')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'listFiles' });
+        vscodeApi.postMessage({ command: 'getOpenFiles' });
+      });
+
+      // File rendering functions
+      function renderFileList(files) {
+        if (!fileList) return;
+        if (files.length === 0) {
+          fileList.innerHTML = '<div class="empty-state"><p>No files found.</p></div>';
+          return;
+        }
+        fileList.innerHTML = '';
+        for (const f of files) {
+          const item = document.createElement('div');
+          item.className = 'file-item';
+          const icon = getFileIcon(f.fileName);
+          item.innerHTML =
+            '<span class="file-icon">' + icon + '</span>' +
+            '<span class="file-name">' + escapeHtml(f.fileName) + '</span>' +
+            '<span class="file-path">' + escapeHtml(f.relativePath) + '</span>' +
+            '<span class="file-language">' + escapeHtml(f.language || '') + '</span>';
+          item.addEventListener('click', () => {
+            vscodeApi.postMessage({ command: 'openFile', filePath: f.fsPath });
+          });
+          item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            vscodeApi.postMessage({ command: 'revealInExplorer', filePath: f.fsPath });
+          });
+          fileList.appendChild(item);
+        }
+      }
+
+      function renderOpenFilesBar(files, activeFile) {
+        if (!openFilesBar) return;
+        if (files.length === 0) {
+          openFilesBar.innerHTML = '';
+          return;
+        }
+        openFilesBar.innerHTML = '';
+        for (const f of files) {
+          const tab = document.createElement('button');
+          tab.className = 'file-tab' + (activeFile && activeFile.fsPath === f.fsPath ? ' active' : '');
+          tab.textContent = f.fileName;
+          tab.title = f.relativePath;
+          tab.addEventListener('click', () => {
+            vscodeApi.postMessage({ command: 'openFile', filePath: f.fsPath });
+          });
+          openFilesBar.appendChild(tab);
+        }
+      }
+
+      function getFileIcon(fileName) {
+        const ext = fileName.split('.').pop()?.toLowerCase() || '';
+        const icons: Record<string, string> = {
+          ts: 'TS', tsx: '⚛', js: 'JS', jsx: '⚛', py: '🐍',
+          json: '📋', md: '📝', css: '🎨', html: '🌐', yaml: '⚙',
+          yml: '⚙', toml: '⚙', sh: '⚡', dockerfile: '🐳',
+          git: '📦', lock: '🔒', env: '🔑', sql: '🗄',
+        };
+        return icons[ext] || '📄';
       }
 
       function escapeHtml(text) {

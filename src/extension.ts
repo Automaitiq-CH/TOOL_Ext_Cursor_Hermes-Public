@@ -2,9 +2,11 @@ import * as vscode from 'vscode';
 import { HermesSidebarProvider } from './sidebarProvider';
 import { ProjectContextService } from './projectContext';
 import { TerminalService } from './terminalService';
+import { FileNavigationService } from './fileNavigation';
 
 let projectContextService: ProjectContextService;
 let terminalService: TerminalService;
+let fileNavigationService: FileNavigationService;
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize project context service
@@ -21,6 +23,26 @@ export function activate(context: vscode.ExtensionContext) {
         dispose: () => terminalService.dispose(),
     });
 
+    // Initialize file navigation service
+    fileNavigationService = new FileNavigationService();
+
+    // Sync project root with file navigation
+    projectContextService.detectProjectRoot().then((rootUri) => {
+        if (rootUri) {
+            fileNavigationService.setProjectRoot(rootUri.fsPath);
+        }
+    });
+    context.subscriptions.push(
+        vscode.workspace.onDidOpenTextDocument(() => {
+            projectContextService.refresh();
+            projectContextService.detectProjectRoot().then((rootUri) => {
+                if (rootUri) {
+                    fileNavigationService.setProjectRoot(rootUri.fsPath);
+                }
+            });
+        }),
+    );
+
     // Detect hermes CLI path
     terminalService.detectHermesPath().then(path => {
         console.log(`Hermes CLI detected at: ${path}`);
@@ -29,7 +51,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Register sidebar webview
-    const sidebarProvider = new HermesSidebarProvider(context.extensionUri, projectContextService);
+    const sidebarProvider = new HermesSidebarProvider(context.extensionUri, projectContextService, fileNavigationService);
     sidebarProvider.setTerminalService(terminalService);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
@@ -61,6 +83,47 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('hermes.inspectContext', async () => {
             const summary = await projectContextService.getContextSummary();
             vscode.window.showInformationMessage(summary);
+        })
+    );
+
+    // File navigation commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('hermes.file.open', async (filePath?: string) => {
+            if (!filePath) {
+                filePath = await vscode.window.showInputBox({
+                    prompt: 'Enter file path (absolute or relative to project root)',
+                    placeHolder: 'src/extension.ts or /absolute/path/to/file.ts',
+                });
+            }
+            if (!filePath) return;
+
+            const opened = await fileNavigationService.openFile(filePath);
+            if (!opened) {
+                vscode.window.showWarningMessage(`Could not open file: ${filePath}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('hermes.file.reveal', async (filePath?: string) => {
+            if (!filePath) {
+                filePath = await vscode.window.showInputBox({
+                    prompt: 'Enter file path to reveal in Explorer',
+                    placeHolder: 'src/extension.ts',
+                });
+            }
+            if (!filePath) return;
+
+            const revealed = await fileNavigationService.revealInExplorer(filePath);
+            if (!revealed) {
+                vscode.window.showWarningMessage(`Could not reveal file: ${filePath}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('hermes.file.quickSwitch', async () => {
+            await fileNavigationService.quickOpen();
         })
     );
 
@@ -136,7 +199,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Hermes Cursor Extension v0.1.0 activated with sidebar, project context, and terminal');
+    console.log('Hermes Cursor Extension v0.1.0 activated with sidebar, project context, terminal, and file navigation');
 }
 
 export function deactivate() {
