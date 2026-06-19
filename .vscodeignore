@@ -1,0 +1,33 @@
+.vscodeignore
+# Compiled output
+# out/  (kept — needed as extension entrypoint)
+dist/
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Dev files
+.vscode-test/
+tsconfig.tsbuildinfo
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+
+# Secrets
+.env
+.env.local
+
+# Screenshots (too large for VSIX, used for marketplace page only)
+screenshots/

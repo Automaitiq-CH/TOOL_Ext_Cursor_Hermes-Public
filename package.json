@@ -1,13 +1,45 @@
 {
-  "name": "hermes-cursor-extension",
+  "name": "hermes-agent",
   "displayName": "Hermes Agent for Cursor",
   "description": "Integrate Hermes Agent directly into your Cursor editor — manage kanban tasks, search sessions, run skills, and more.",
   "version": "0.1.0",
+  "publisher": "automaitiq",
+  "author": {
+    "name": "Automaitiq",
+    "email": "contact@automaitiq.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "assets/logo.png",
+  "galleryBanner": {
+    "color": "#1E1E2E",
+    "theme": "dark"
+  },
   "categories": [
-    "Other"
+    "Other",
+    "Programming Languages",
+    "Visualization"
+  ],
+  "badges": [
+    {
+      "url": "https://img.shields.io/badge/version-0.1.0-blue.svg",
+      "href": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes",
+      "description": "Version 0.1.0"
+    }
+  ],
+  "keywords": [
+    "hermes",
+    "ai",
+    "agent",
+    "kanban",
+    "automation",
+    "coding assistant"
   ],
   "activationEvents": [
     "onView:hermesSidebar"
@@ -65,7 +97,7 @@
         {
           "id": "hermes",
           "title": "Hermes Agent",
-          "icon": "$(pulse)"
+          "icon": "assets/activitybar-icon.png"
         }
       ]
     },
