@@ -1,6 +1,6 @@
-import * as vscode from 'vscode';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
+import { promisify } from 'util';
 import { ProjectContextService } from './projectContext';
 
 export interface ChatMessage {
@@ -62,8 +62,6 @@ export class ChatService extends EventEmitter {
    */
   public async detectHermesPath(): Promise<boolean> {
     try {
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
       const execAsync = promisify(exec);
       const { stdout } = await execAsync('which hermes 2>/dev/null || where hermes 2>/dev/null');
       const detected = stdout.trim();

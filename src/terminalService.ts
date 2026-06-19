@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
+import { promisify } from 'util';
 
 export interface TerminalOutput {
   id: string;
@@ -43,8 +44,6 @@ export class TerminalService extends EventEmitter {
    */
   public async detectHermesPath(): Promise<string> {
     try {
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
       const execAsync = promisify(exec);
 
       // Try 'which hermes' first

@@ -238,6 +238,7 @@ export class ProjectContextService {
     const markers = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'workspace.json'];
     let current = startPath;
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       for (const marker of markers) {
         const candidate = path.join(current, marker);

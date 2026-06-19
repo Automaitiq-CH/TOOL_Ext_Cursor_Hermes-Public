@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProjectContextService } from './projectContext';
 import { TerminalService } from './terminalService';
@@ -88,10 +87,11 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           this.chatService?.cancelStreaming();
           this.view?.webview.postMessage({ command: 'cancelStreaming' });
           break;
-        case 'newChatSession':
+        case 'newChatSession': {
           const newId = this.chatService?.newSession() || '';
           this.view?.webview.postMessage({ command: 'newChatSession', sessionId: newId });
           break;
+        }
         default:
           console.log(`Unknown message: ${message.command}`);
       }
