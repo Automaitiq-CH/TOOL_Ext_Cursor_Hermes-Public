@@ -1,15 +1,21 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProjectContextService } from './projectContext';
+import { TerminalService } from './terminalService';
 
 export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'hermesSidebar';
   private view?: vscode.WebviewView;
+  private terminalService?: TerminalService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly projectContext?: ProjectContextService
   ) {}
+
+  public setTerminalService(service: TerminalService) {
+    this.terminalService = service;
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -30,14 +36,73 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
           console.log('Hermes sidebar webview ready');
           break;
+        case 'executeCommand':
+          this.handleExecuteCommand(message.commandId, message.args);
+          break;
+        case 'executeCustomCommand':
+          this.handleExecuteCustomCommand(message.input);
+          break;
+        case 'clearTerminal':
+          this.terminalService?.clearHistory();
+          this.view?.webview.postMessage({ command: 'clearTerminal' });
+          break;
+        case 'cancelCommand':
+          this.terminalService?.cancelCommand(message.id);
+          break;
         default:
           console.log(`Unknown message: ${message.command}`);
       }
     });
   }
 
+  private async handleExecuteCommand(commandId: string, args: string[] = []) {
+    if (!this.terminalService) {
+      console.error('Terminal service not initialized');
+      return;
+    }
+
+    const cmd = TerminalService.PREDEFINED_COMMANDS.find((c) => c.id === commandId);
+    if (!cmd) {
+      console.error(`Unknown command: ${commandId}`);
+      return;
+    }
+
+    try {
+      await this.terminalService.executeCommand(cmd.command, [...cmd.args, ...args]);
+    } catch (err) {
+      console.error(`Failed to execute command ${commandId}:`, err);
+    }
+  }
+
+  private async handleExecuteCustomCommand(input: string) {
+    if (!this.terminalService) {
+      console.error('Terminal service not initialized');
+      return;
+    }
+
+    const parts = input.trim().split(/\s+/);
+    const command = parts[0];
+    const args = parts.slice(1);
+
+    try {
+      await this.terminalService.executeCommand(command, args);
+    } catch (err) {
+      console.error(`Failed to execute custom command:`, err);
+    }
+  }
+
   public updateStatus(status: 'connected' | 'disconnected' | 'connecting') {
     this.view?.webview.postMessage({ command: 'status', status });
+  }
+
+  public sendTerminalOutput(data: any) {
+    this.view?.webview.postMessage({ command: 'terminalOutput', data });
+  }
+
+  public sendTerminalHistory() {
+    if (!this.terminalService || !this.view) return;
+    const history = this.terminalService.getHistory();
+    this.view.webview.postMessage({ command: 'terminalHistory', data: history });
   }
 
   public async sendProjectContext() {
@@ -90,6 +155,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         <span class="nav-icon">&#9776;</span>
         <span class="nav-label">Kanban</span>
       </button>
+      <button class="nav-item" data-tab="terminal" title="Run Hermes CLI commands">
+        <span class="nav-icon">&#9608;</span>
+        <span class="nav-label">Terminal</span>
+      </button>
       <button class="nav-item" data-tab="sessions" title="Session history">
         <span class="nav-icon">&#8984;</span>
         <span class="nav-label">Sessions</span>
@@ -128,6 +197,68 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           <div class="empty-icon">&#9776;</div>
           <h2>Kanban Board</h2>
           <p>View and manage your kanban tasks directly from Cursor.</p>
+        </div>
+      </section>
+
+      <section id="tab-terminal" class="tab-content">
+        <div class="terminal-container">
+          <div class="terminal-header">
+            <h3>Hermes Terminal</h3>
+            <div class="terminal-actions">
+              <button id="btn-clear-terminal" class="btn-icon" title="Clear terminal">🗑️</button>
+            </div>
+          </div>
+          <div id="terminal-commands" class="terminal-commands">
+            <div class="terminal-command-group">
+              <h4>Quick Commands</h4>
+              <div class="command-grid">
+                <button class="cmd-btn" data-cmd="hermes.status" title="Show Hermes status">
+                  <span class="cmd-icon">☢️</span>
+                  <span class="cmd-label">Status</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.kanban.list" title="List kanban tasks">
+                  <span class="cmd-icon">📋</span>
+                  <span class="cmd-label">Kanban</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.sessions" title="List sessions">
+                  <span class="cmd-icon">📁</span>
+                  <span class="cmd-label">Sessions</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.skills" title="List available skills">
+                  <span class="cmd-icon">🧠</span>
+                  <span class="cmd-label">Skills</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.cron" title="List cron jobs">
+                  <span class="cmd-icon">⏰</span>
+                  <span class="cmd-label">Cron</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.logs" title="View recent logs">
+                  <span class="cmd-icon">📝</span>
+                  <span class="cmd-label">Logs</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.config" title="Show configuration">
+                  <span class="cmd-icon">⚙️</span>
+                  <span class="cmd-label">Config</span>
+                </button>
+                <button class="cmd-btn" data-cmd="hermes.version" title="Show Hermes version">
+                  <span class="cmd-icon">🏷️</span>
+                  <span class="cmd-label">Version</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div id="terminal-output" class="terminal-output"></div>
+          <div class="terminal-input-container">
+            <span class="terminal-prompt">$</span>
+            <input
+              id="terminal-input"
+              type="text"
+              placeholder="Run a Hermes command (e.g. hermes status)..."
+              class="terminal-input"
+              autocomplete="off"
+            />
+            <button id="btn-run-command" class="btn-send" title="Run command">▶</button>
+          </div>
         </div>
       </section>
 
@@ -170,6 +301,8 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     (function() {
       const vscodeApi = acquireVsCodeApi();
+      const terminalOutput = document.getElementById('terminal-output');
+      const commandOutputs = new Map();
 
       // Send ready signal
       window.addEventListener('load', () => {
@@ -189,7 +322,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
       // Connection status updates from extension
       window.addEventListener('message', event => {
-        const { command, status } = event.data;
+        const { command, status, data } = event.data;
         if (command === 'status') {
           const badge = document.getElementById('connection-status');
           if (badge) {
@@ -199,6 +332,58 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
             if (text) text.textContent = labels[status] || status;
           }
         }
+        if (command === 'terminalOutput') {
+          appendTerminalOutput(data);
+        }
+        if (command === 'clearTerminal') {
+          terminalOutput.innerHTML = '';
+          commandOutputs.clear();
+        }
+      });
+
+      // Quick command buttons
+      document.querySelectorAll('.cmd-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const cmdId = btn.dataset.cmd;
+          btn.classList.add('running');
+          vscodeApi.postMessage({ command: 'executeCommand', commandId: cmdId, args: [] });
+
+          // Create output block for this command
+          const cmdTitle = btn.querySelector('.cmd-label')?.textContent || cmdId;
+          addCommandBlock(cmdId, cmdTitle);
+        });
+      });
+
+      // Custom command input
+      const terminalInput = document.getElementById('terminal-input');
+      const runBtn = document.getElementById('btn-run-command');
+
+      if (runBtn) {
+        runBtn.addEventListener('click', () => {
+          if (terminalInput && terminalInput.value.trim()) {
+            vscodeApi.postMessage({ command: 'executeCustomCommand', input: terminalInput.value.trim() });
+            const inputVal = terminalInput.value.trim();
+            addCommandBlock('custom_' + Date.now(), inputVal);
+            terminalInput.value = '';
+          }
+        });
+      }
+
+      if (terminalInput) {
+        terminalInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && terminalInput.value.trim()) {
+            e.preventDefault();
+            vscodeApi.postMessage({ command: 'executeCustomCommand', input: terminalInput.value.trim() });
+            const inputVal = terminalInput.value.trim();
+            addCommandBlock('custom_' + Date.now(), inputVal);
+            terminalInput.value = '';
+          }
+        });
+      }
+
+      // Clear terminal button
+      document.getElementById('btn-clear-terminal')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'clearTerminal' });
       });
 
       // Connect button
@@ -226,6 +411,58 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           settings: { gatewayUrl, apiKey, profile }
         });
       });
+
+      // Terminal helper functions
+      function addCommandBlock(id, title) {
+        const block = document.createElement('div');
+        block.className = 'command-block';
+        block.id = 'cmd-' + id;
+        block.innerHTML =
+          '<div class="command-header">' +
+            '<span class="command-title">$ ' + escapeHtml(title) + '</span>' +
+            '<span class="command-status running">\u23F3 Running...</span>' +
+          '</div>' +
+          '<pre class="command-output"></pre>';
+        terminalOutput.appendChild(block);
+        commandOutputs.set(id, block);
+        block.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
+
+      function appendTerminalOutput(data) {
+        let block = commandOutputs.get(data.id);
+        if (!block) {
+          addCommandBlock(data.id, data.command || 'command');
+          block = commandOutputs.get(data.id);
+        }
+
+        if (block) {
+          const output = block.querySelector('.command-output');
+          const status = block.querySelector('.command-status');
+
+          if (data.text) {
+            if (output) {
+              output.textContent += data.text;
+            }
+          }
+
+          if (data.exitCode !== undefined) {
+            if (status) {
+              status.className = 'command-status ' + (data.exitCode === 0 ? 'success' : 'error');
+              status.textContent = data.exitCode === 0
+                ? '✓ Done (' + data.duration + 'ms)'
+                : '✗ Failed (code ' + data.exitCode + ')';
+            }
+          }
+
+          block.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
     })();
   </script>
 </body>

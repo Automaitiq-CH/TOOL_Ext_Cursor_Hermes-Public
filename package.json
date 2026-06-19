@@ -18,6 +18,46 @@
       {
         "command": "hermes.openSidebar",
         "title": "Hermes: Open Sidebar"
+      },
+      {
+        "command": "hermes.runCommand",
+        "title": "Hermes: Run Command"
+      },
+      {
+        "command": "hermes.showOutput",
+        "title": "Hermes: Show Output Channel"
+      },
+      {
+        "command": "hermes.status",
+        "title": "Hermes: Show Status"
+      },
+      {
+        "command": "hermes.kanban.list",
+        "title": "Hermes: List Kanban Tasks"
+      },
+      {
+        "command": "hermes.sessions",
+        "title": "Hermes: List Sessions"
+      },
+      {
+        "command": "hermes.skills",
+        "title": "Hermes: List Skills"
+      },
+      {
+        "command": "hermes.cron",
+        "title": "Hermes: List Cron Jobs"
+      },
+      {
+        "command": "hermes.logs",
+        "title": "Hermes: View Logs"
+      },
+      {
+        "command": "hermes.config",
+        "title": "Hermes: Show Config"
+      },
+      {
+        "command": "hermes.version",
+        "title": "Hermes: Show Version"
       }
     ],
     "viewsContainers": {
