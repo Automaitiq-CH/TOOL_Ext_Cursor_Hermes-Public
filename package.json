@@ -1,0 +1,62 @@
+{
+  "name": "hermes-cursor-extension",
+  "displayName": "Hermes Agent for Cursor",
+  "description": "Integrate Hermes Agent directly into your Cursor editor — manage kanban tasks, search sessions, run skills, and more.",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:hermesSidebar"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "hermes.openSidebar",
+        "title": "Hermes: Open Sidebar"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hermes",
+          "title": "Hermes Agent",
+          "icon": "$(pulse)"
+        }
+      ]
+    },
+    "views": {
+      "hermes": [
+        {
+          "type": "webview",
+          "id": "hermesSidebar",
+          "name": "Hermes"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx vsce package",
+    "lint": "npx eslint src --ext ts",
+    "pretest": "npm run compile && npm run lint",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.55.0",
+    "typescript": "^5.3.2",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.0",
+    "vsce": "^2.15.0"
+  }
+}
