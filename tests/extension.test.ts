@@ -22,7 +22,7 @@ suite('Extension Activation Tests', () => {
 
 suite('Package.json Validation', () => {
   test('package.json should have required fields', () => {
-    const pkg = require('../package.json');
+    const pkg = require('../../package.json');
     assert.ok(pkg.name, 'name should be defined');
     assert.ok(pkg.version, 'version should be defined');
     assert.ok(pkg.displayName, 'displayName should be defined');
@@ -31,7 +31,7 @@ suite('Package.json Validation', () => {
   });
 
   test('activationEvents should include sidebar view', () => {
-    const pkg = require('../package.json');
+    const pkg = require('../../package.json');
     assert.ok(
       pkg.activationEvents.includes('onView:hermesSidebar'),
       'Should activate on hermesSidebar view'

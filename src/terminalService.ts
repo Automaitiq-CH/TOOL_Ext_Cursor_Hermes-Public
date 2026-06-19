@@ -55,11 +55,12 @@ export class TerminalService extends EventEmitter {
       }
 
       // Fallback: check common locations
+      const home = process.env.HOME || process.env.USERPROFILE || '';
       const commonPaths = [
         '/usr/local/bin/hermes',
-        '/Users/mmserver/.local/bin/hermes',
+        home ? home + '/.local/bin/hermes' : '',
         'hermes',
-      ];
+      ].filter(Boolean);
 
       for (const p of commonPaths) {
         try {
@@ -238,57 +239,57 @@ export class TerminalService extends EventEmitter {
     {
       id: 'hermes.status',
       title: 'Hermes: Show Status',
-      command: 'hermes',
-      args: ['status'],
+      command: 'status',
+      args: [],
       icon: '☢️',
     },
     {
       id: 'hermes.kanban.list',
       title: 'Hermes: List Kanban Tasks',
-      command: 'hermes',
-      args: ['kanban', 'list'],
+      command: 'kanban',
+      args: ['list'],
       icon: '📋',
     },
     {
       id: 'hermes.sessions',
       title: 'Hermes: List Sessions',
-      command: 'hermes',
-      args: ['sessions', 'list'],
+      command: 'sessions',
+      args: ['list'],
       icon: '📁',
     },
     {
       id: 'hermes.skills',
       title: 'Hermes: List Skills',
-      command: 'hermes',
-      args: ['skills', 'list'],
+      command: 'skills',
+      args: ['list'],
       icon: '🧠',
     },
     {
       id: 'hermes.cron',
       title: 'Hermes: List Cron Jobs',
-      command: 'hermes',
-      args: ['cron', 'list'],
+      command: 'cron',
+      args: ['list'],
       icon: '⏰',
     },
     {
       id: 'hermes.logs',
       title: 'Hermes: View Logs',
-      command: 'hermes',
-      args: ['logs'],
+      command: 'logs',
+      args: [],
       icon: '📝',
     },
     {
       id: 'hermes.config',
       title: 'Hermes: Show Config',
-      command: 'hermes',
-      args: ['config'],
+      command: 'config',
+      args: [],
       icon: '⚙️',
     },
     {
       id: 'hermes.version',
       title: 'Hermes: Show Version',
-      command: 'hermes',
-      args: ['version'],
+      command: 'version',
+      args: [],
       icon: '🏷️',
     },
   ];

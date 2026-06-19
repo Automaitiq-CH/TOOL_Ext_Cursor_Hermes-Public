@@ -31,3 +31,18 @@ coverage/
 
 # Screenshots (too large for VSIX, used for marketplace page only)
 screenshots/
+
+# Python venvs
+.venv*/
+
+# Spikes and scripts (dev-only)
+spikes/
+scripts/
+
+# Hermes plans
+.hermes/
+
+# Branding docs
+BRAND_GUIDELINES.md
+branding.md
+generate_assets.py

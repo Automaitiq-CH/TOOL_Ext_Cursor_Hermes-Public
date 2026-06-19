@@ -46,6 +46,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
           console.log('Hermes sidebar webview ready');
           this.sendRestoredSession();
+          this.sendProjectContext();
+          break;
+        case 'getContext':
+          this.sendProjectContext();
           break;
         case 'executeCommand':
           this.handleExecuteCommand(message.commandId, message.args);
@@ -84,6 +88,12 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'saveSettings':
           this.handleSaveSettings(message.settings);
           break;
+        case 'loadKanban':
+          this.handleLoadKanban();
+          break;
+        case 'loadSessions':
+          this.handleLoadSessions();
+          break;
         case 'cancelStreaming':
           this.chatService?.cancelStreaming();
           this.view?.webview.postMessage({ command: 'cancelStreaming' });
@@ -93,6 +103,18 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           this.view?.webview.postMessage({ command: 'newChatSession', sessionId: newId });
           break;
         }
+        case 'retryLastMessage':
+          this.handleRetryLastMessage();
+          break;
+        case 'runChatCommand':
+          this.handleRunChatCommand(message.command);
+          break;
+        case 'openFileRef':
+          this.handleOpenFile(message.filePath, message.line, message.character);
+          break;
+        case 'checkGateway':
+          this.handleCheckGateway();
+          break;
         default:
           console.log(`Unknown message: ${message.command}`);
       }
@@ -154,8 +176,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      const summary = await this.projectContext.getContextSummary();
-      this.view.webview.postMessage({ command: 'projectContext', summary });
+      const [summary, apiContext] = await Promise.all([
+        this.projectContext.getContextSummary(),
+        this.projectContext.formatForHermesApi(),
+      ]);
+      this.view.webview.postMessage({
+        command: 'projectContext',
+        summary,
+        context: apiContext,
+      });
     } catch (err) {
       console.error('Failed to get project context:', err);
     }
@@ -179,20 +208,91 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string }) {
+  private handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string; transport?: string }) {
     if (this.chatService) {
       this.chatService.setSettings({
         gatewayUrl: settings.gatewayUrl || 'http://localhost:8080',
         profile: settings.profile || 'default',
+        transport: (settings.transport as any) || 'auto',
+        apiKey: settings.apiKey,
       });
     }
-    // Save to VS Code global state
-    // (could be persisted later)
     console.log('Settings saved:', settings);
+  }
+
+  private async handleRetryLastMessage() {
+    if (!this.chatService) return;
+    try {
+      await this.chatService.retryLastMessage();
+    } catch (err) {
+      this.view?.webview.postMessage({ command: 'chatError', message: String(err) });
+    }
+  }
+
+  private async handleRunChatCommand(command: string) {
+    if (!this.terminalService) {
+      console.error('Terminal service not initialized');
+      return;
+    }
+    const parts = command.trim().split(/\s+/);
+    // Strip leading 'hermes' if present
+    const cmdParts = parts[0] === 'hermes' ? parts.slice(1) : parts;
+    if (cmdParts.length === 0) return;
+
+    try {
+      this.terminalService.getOutputChannel().show(true);
+      await this.terminalService.executeCommand(cmdParts[0], cmdParts.slice(1));
+    } catch (err) {
+      console.error(`Failed to execute chat command:`, err);
+    }
+  }
+
+  private async handleCheckGateway() {
+    if (!this.chatService || !this.view) return;
+    try {
+      const available = await this.chatService.checkGateway();
+      this.view.webview.postMessage({
+        command: 'gatewayStatus',
+        available,
+        url: this.chatService.getSettings().gatewayUrl,
+      });
+    } catch (err) {
+      this.view.webview.postMessage({ command: 'gatewayStatus', available: false, error: String(err) });
+    }
+  }
+
+  private async handleLoadKanban() {
+    if (!this.terminalService || !this.view) return;
+    try {
+      const result = await this.terminalService.executeCommand('kanban', ['list', '--json'], undefined, 15000);
+      if (result.exitCode === 0 && result.stdout) {
+        this.view.webview.postMessage({ command: 'kanbanData', data: result.stdout });
+      } else {
+        // Fallback: try without --json
+        const fallback = await this.terminalService.executeCommand('kanban', ['list'], undefined, 15000);
+        this.view.webview.postMessage({ command: 'kanbanData', data: fallback.stdout || 'No kanban data available.' });
+      }
+    } catch (err) {
+      this.view?.webview.postMessage({ command: 'kanbanData', error: String(err) });
+    }
+  }
+
+  private async handleLoadSessions() {
+    if (!this.chatService || !this.view) return;
+    try {
+      const sessions = await this.chatService.listSessions();
+      this.view.webview.postMessage({ command: 'sessionsData', sessions });
+    } catch (err) {
+      this.view?.webview.postMessage({ command: 'sessionsData', sessions: [], error: String(err) });
+    }
   }
 
   public updateChatStatus(status: 'ready' | 'no-cli' | 'connecting') {
     this.view?.webview.postMessage({ command: 'chatStatus', status });
+  }
+
+  public updateConnectionStatus(status: string) {
+    this.view?.webview.postMessage({ command: 'connectionStatus', status });
   }
 
   public sendChatMessage(data: any) {
@@ -314,9 +414,9 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         <span class="logo-icon">&#9889;</span>
         <h1 class="logo-text">Hermes Agent</h1>
       </div>
-      <div id="connection-status" class="status-badge disconnected">
+      <div id="connection-status" class="status-badge connecting">
         <span class="status-dot"></span>
-        <span class="status-text">Disconnected</span>
+        <span class="status-text">Initializing...</span>
       </div>
     </header>
 
@@ -382,10 +482,14 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       </section>
 
       <section id="tab-kanban" class="tab-content">
-        <div class="empty-state">
-          <div class="empty-icon">&#9776;</div>
-          <h2>Kanban Board</h2>
-          <p>View and manage your kanban tasks directly from Cursor.</p>
+        <div class="kanban-header">
+          <h3>Kanban Board</h3>
+          <button id="btn-refresh-kanban" class="btn-icon" title="Refresh kanban">&#8635;</button>
+        </div>
+        <div id="kanban-content" class="kanban-content">
+          <div class="empty-state">
+            <p>Click refresh to load kanban tasks.</p>
+          </div>
         </div>
       </section>
 
@@ -480,10 +584,14 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       </section>
 
       <section id="tab-sessions" class="tab-content">
-        <div class="empty-state">
-          <div class="empty-icon">&#8984;</div>
-          <h2>Session History</h2>
-          <p>Browse and resume previous conversation sessions.</p>
+        <div class="sessions-header">
+          <h3>Session History</h3>
+          <button id="btn-refresh-sessions" class="btn-icon" title="Refresh sessions">&#8635;</button>
+        </div>
+        <div id="sessions-content" class="sessions-content">
+          <div class="empty-state">
+            <p>Click refresh to load session history.</p>
+          </div>
         </div>
       </section>
 
@@ -493,10 +601,11 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           <div class="setting-group">
             <label for="gateway-url">Gateway URL</label>
             <input id="gateway-url" type="text" placeholder="http://localhost:8080" class="setting-input" />
+            <div id="gateway-status" class="gateway-status"></div>
           </div>
           <div class="setting-group">
             <label for="api-key">API Key</label>
-            <input id="api-key" type="password" placeholder="Enter API key" class="setting-input" />
+            <input id="api-key" type="password" placeholder="Enter API key (optional)" class="setting-input" />
           </div>
           <div class="setting-group">
             <label for="profile">Profile</label>
@@ -504,7 +613,18 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
               <option value="default">default</option>
             </select>
           </div>
-          <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+          <div class="setting-group">
+            <label for="transport">Transport</label>
+            <select id="transport" class="setting-input">
+              <option value="auto">Auto (Gateway → CLI fallback)</option>
+              <option value="gateway">Gateway only</option>
+              <option value="cli">CLI only</option>
+            </select>
+          </div>
+          <div class="settings-actions">
+            <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+            <button id="btn-check-gateway" class="btn-secondary">Test Gateway</button>
+          </div>
         </div>
       </section>
     </main>
@@ -600,6 +720,14 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         if (command === 'chatError') {
           showChatError(data.message || data.error || 'Unknown error');
         }
+        // Connection status updates from chat service
+        if (command === 'connectionStatus') {
+          updateConnectionIndicator(status);
+        }
+        // Gateway check result
+        if (command === 'gatewayStatus') {
+          updateGatewayIndicator(data);
+        }
         // Cancel streaming
         if (command === 'cancelStreaming') {
           finishStreamingMessage();
@@ -624,6 +752,14 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           for (const msg of (data.messages || [])) {
             appendChatMessage(msg);
           }
+        }
+        // Kanban data loaded
+        if (command === 'kanbanData') {
+          renderKanban(data);
+        }
+        // Sessions data loaded
+        if (command === 'sessionsData') {
+          renderSessions(data.sessions || []);
         }
       });
 
@@ -699,29 +835,52 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      // Finish streaming
+      // Finish streaming and add action buttons
       function finishStreamingMessage() {
         if (currentStreamingMsgId) {
-          const sel2 = '[data-msg-id="' + currentStreamingMsgId + '"]';
-          const el = chatMessages?.querySelector(sel2);
+          var sel2 = '[data-msg-id="' + currentStreamingMsgId + '"]';
+          var el = chatMessages?.querySelector(sel2);
           if (el) {
             el.classList.remove('streaming');
+          }
+          // Extract commands and file refs from the completed message
+          var contentEl = chatMessages?.querySelector(sel2 + ' .chat-bubble-content');
+          if (contentEl) {
+            addActionButtons(currentStreamingMsgId, contentEl.textContent || '');
           }
           currentStreamingMsgId = null;
         }
         setStreamingState(false);
       }
 
-      // Show error message in chat
+      // Show error message in chat with retry button
       function showChatError(errorText) {
         if (!chatMessages) return;
+        setStreamingState(false);
+
         const div = document.createElement('div');
         div.className = 'chat-bubble chat-bubble-error';
-        div.innerHTML =
-          '<div class="chat-bubble-content">&#9888; ' + escapeHtml(errorText) + '</div>';
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'chat-bubble-content';
+        contentDiv.innerHTML = '&#9888; ' + escapeHtml(errorText);
+        div.appendChild(contentDiv);
+
+        // Retry button
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'chat-retry-btn';
+        retryBtn.textContent = '&#8635; Retry';
+        retryBtn.innerHTML = '&#8635; Retry';
+        retryBtn.title = 'Retry last message';
+        retryBtn.addEventListener('click', function() {
+          div.remove();
+          vscodeApi.postMessage({ command: 'retryLastMessage' });
+          setStreamingState(true);
+        });
+        div.appendChild(retryBtn);
+
         chatMessages.appendChild(div);
         chatMessages.scrollTop = chatMessages.scrollHeight;
-        setStreamingState(false);
       }
 
       // Reset chat UI for new session
@@ -740,7 +899,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         chatHeaderTitle.textContent = preview + (text.length > 40 ? '...' : '');
       }
 
-      // Format message content (support markdown-ish code blocks)
+      // Format message content (support markdown-ish code blocks + action buttons)
       function formatMessageContent(text, role) {
         if (!text) return '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>';
         let html = escapeHtml(text);
@@ -753,6 +912,110 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         // Line breaks
         html = html.replace(/\n/g, '<br>');
         return html;
+      }
+
+      // After streaming completes, add action buttons for commands and file refs
+      function addActionButtons(msgId, content) {
+        if (!chatMessages) return;
+        var sel = '[data-msg-id="' + msgId + '"]';
+        var bubble = chatMessages.querySelector(sel);
+        if (!bubble) return;
+
+        // Extract hermes commands from content
+        var commands = [];
+        var bt3 = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+        var codeBlockRegex = new RegExp(bt3 + '(?:sh|bash|shell|terminal)?\\s*\\n([\\s\\S]*?)' + bt3, 'g');
+        var match;
+        while ((match = codeBlockRegex.exec(content)) !== null) {
+          var lines = match[1].trim().split('\\n');
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim().replace(/^\\$\\s*/, '');
+            if (line.startsWith('hermes ')) {
+              commands.push(line);
+            }
+          }
+        }
+        // Inline hermes commands
+        var bt = String.fromCharCode(96);
+        var inlineRegex = new RegExp(bt + '(hermes\\s+[^' + bt + ']+)' + bt, 'g');
+        while ((match = inlineRegex.exec(content)) !== null) {
+          var cmd = match[1].trim();
+          if (commands.indexOf(cmd) === -1) commands.push(cmd);
+        }
+
+        // Extract file references
+        var fileRefs = [];
+        var fileRegex = new RegExp(bt + '([^' + bt + '\\s]+\\.\\w{2,5})(?::(\\d+))?' + bt, 'g');
+        while ((match = fileRegex.exec(content)) !== null) {
+          var fp = match[1];
+          var ln = match[2] ? parseInt(match[2], 10) : undefined;
+          if (fp.indexOf('hermes') === -1 && !commands.some(function(c) { return c.indexOf(fp) !== -1; })) {
+            fileRefs.push({ path: fp, line: ln });
+          }
+        }
+
+        if (commands.length === 0 && fileRefs.length === 0) return;
+
+        var actionBar = document.createElement('div');
+        actionBar.className = 'chat-action-bar';
+
+        for (var ci = 0; ci < commands.length; ci++) {
+          (function(cmd) {
+            var btn = document.createElement('button');
+            btn.className = 'chat-action-btn chat-action-cmd';
+            btn.title = 'Run: ' + cmd;
+            btn.textContent = '\u25B6 ' + cmd;
+            btn.addEventListener('click', function() {
+              vscodeApi.postMessage({ command: 'runChatCommand', command: cmd });
+              btn.classList.add('executed');
+              btn.textContent = '\u2713 ' + cmd;
+            });
+            actionBar.appendChild(btn);
+          })(commands[ci]);
+        }
+
+        for (var fi = 0; fi < fileRefs.length; fi++) {
+          (function(ref) {
+            var btn = document.createElement('button');
+            btn.className = 'chat-action-btn chat-action-file';
+            btn.title = 'Open: ' + ref.path + (ref.line ? ':' + ref.line : '');
+            btn.textContent = '\uD83D\uDCC4 ' + ref.path + (ref.line ? ':' + ref.line : '');
+            btn.addEventListener('click', function() {
+              vscodeApi.postMessage({ command: 'openFileRef', filePath: ref.path, line: ref.line });
+            });
+            actionBar.appendChild(btn);
+          })(fileRefs[fi]);
+        }
+
+        bubble.appendChild(actionBar);
+      }
+
+      // Update connection indicator in chat status bar
+      function updateConnectionIndicator(status) {
+        if (!chatStatusBar || !chatStatusText) return;
+        chatStatusBar.className = 'chat-status-bar ' + status;
+        if (status === 'connected') {
+          chatStatusText.textContent = 'Connected';
+        } else if (status === 'connecting') {
+          chatStatusText.textContent = 'Connecting...';
+        } else if (status === 'error') {
+          chatStatusText.textContent = 'Connection error';
+        } else {
+          chatStatusText.textContent = 'Disconnected';
+        }
+      }
+
+      // Update gateway status indicator in settings
+      function updateGatewayIndicator(data) {
+        var el = document.getElementById('gateway-status');
+        if (!el) return;
+        if (data.available) {
+          el.className = 'gateway-status available';
+          el.textContent = '\u2713 Gateway reachable at ' + (data.url || '');
+        } else {
+          el.className = 'gateway-status unavailable';
+          el.textContent = '\u2717 Gateway not reachable' + (data.error ? ': ' + data.error : '');
+        }
       }
 
       // Format timestamp
@@ -773,11 +1036,6 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           if (chatInput) { chatInput.disabled = false; chatInput.placeholder = 'Ask Hermes anything...'; }
         }
       }
-
-      // Connect button (removed — auto-connects now)
-      document.getElementById('btn-connect')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'connect' });
-      });
 
       // Chat form — send message
       if (chatForm) {
@@ -869,20 +1127,26 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         vscodeApi.postMessage({ command: 'clearTerminal' });
       });
 
-      // Connect button
-      document.getElementById('btn-connect')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'connect' });
-      });
-
       // Save settings
       document.getElementById('btn-save-settings')?.addEventListener('click', () => {
         const gatewayUrl = document.getElementById('gateway-url').value;
         const apiKey = document.getElementById('api-key').value;
         const profile = document.getElementById('profile').value;
+        const transport = document.getElementById('transport')?.value || 'auto';
         vscodeApi.postMessage({
           command: 'saveSettings',
-          settings: { gatewayUrl, apiKey, profile }
+          settings: { gatewayUrl, apiKey, profile, transport }
         });
+      });
+
+      // Test gateway button
+      document.getElementById('btn-check-gateway')?.addEventListener('click', () => {
+        var el = document.getElementById('gateway-status');
+        if (el) {
+          el.className = 'gateway-status checking';
+          el.textContent = 'Checking...';
+        }
+        vscodeApi.postMessage({ command: 'checkGateway' });
       });
 
       // Terminal helper functions
@@ -950,7 +1214,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       });
 
       // Search files input with debounce
-      let searchTimeout: any = null;
+      let searchTimeout = null;
       if (fileSearchInput) {
         fileSearchInput.addEventListener('input', () => {
           clearTimeout(searchTimeout);
@@ -1019,8 +1283,9 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       }
 
       function getFileIcon(fileName) {
-        const ext = fileName.split('.').pop()?.toLowerCase() || '';
-        const icons: Record<string, string> = {
+        var ext = fileName.split('.').pop();
+        if (ext) ext = ext.toLowerCase(); else ext = '';
+        var icons = {
           ts: 'TS', tsx: '⚛', js: 'JS', jsx: '⚛', py: '🐍',
           json: '📋', md: '📝', css: '🎨', html: '🌐', yaml: '⚙',
           yml: '⚙', toml: '⚙', sh: '⚡', dockerfile: '🐳',
@@ -1028,6 +1293,64 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         };
         return icons[ext] || '📄';
       }
+
+      // Kanban rendering
+      function renderKanban(data) {
+        var container = document.getElementById('kanban-content');
+        if (!container) return;
+        if (typeof data === 'string') {
+          container.innerHTML = '<pre class="kanban-raw">' + escapeHtml(data) + '</pre>';
+          return;
+        }
+        if (data && data.error) {
+          container.innerHTML = '<div class="empty-state"><p>Error loading kanban: ' + escapeHtml(data.error) + '</p></div>';
+          return;
+        }
+        container.innerHTML = '<pre class="kanban-raw">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+      }
+
+      document.getElementById('btn-refresh-kanban')?.addEventListener('click', function() {
+        var container = document.getElementById('kanban-content');
+        if (container) container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+        vscodeApi.postMessage({ command: 'loadKanban' });
+      });
+
+      // Auto-load kanban on tab click
+      document.querySelector('[data-tab="kanban"]')?.addEventListener('click', function() {
+        vscodeApi.postMessage({ command: 'loadKanban' });
+      });
+
+      // Sessions rendering
+      function renderSessions(sessions) {
+        var container = document.getElementById('sessions-content');
+        if (!container) return;
+        if (!sessions || sessions.length === 0) {
+          container.innerHTML = '<div class="empty-state"><p>No sessions found.</p></div>';
+          return;
+        }
+        container.innerHTML = '';
+        for (var i = 0; i < sessions.length; i++) {
+          var s = sessions[i];
+          var item = document.createElement('div');
+          item.className = 'session-item';
+          item.innerHTML =
+            '<div class="session-title">' + escapeHtml(s.title || 'Untitled') + '</div>' +
+            '<div class="session-meta">' + escapeHtml(s.when || '') + '</div>' +
+            '<div class="session-preview">' + escapeHtml(s.preview || '') + '</div>';
+          container.appendChild(item);
+        }
+      }
+
+      document.getElementById('btn-refresh-sessions')?.addEventListener('click', function() {
+        var container = document.getElementById('sessions-content');
+        if (container) container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+        vscodeApi.postMessage({ command: 'loadSessions' });
+      });
+
+      // Auto-load sessions on tab click
+      document.querySelector('[data-tab="sessions"]')?.addEventListener('click', function() {
+        vscodeApi.postMessage({ command: 'loadSessions' });
+      });
 
       function escapeHtml(text) {
         const div = document.createElement('div');

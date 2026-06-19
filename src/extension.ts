@@ -9,14 +9,31 @@ let projectContextService: ProjectContextService;
 let terminalService: TerminalService;
 let fileNavigationService: FileNavigationService;
 let chatService: ChatService;
+let sidebarProvider: HermesSidebarProvider;
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize project context service
     projectContextService = new ProjectContextService();
+    context.subscriptions.push(projectContextService);
+
+    // Context refresh on document events
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument(() => projectContextService.refresh()),
         vscode.workspace.onDidCloseTextDocument(() => projectContextService.refresh()),
         vscode.workspace.onDidSaveTextDocument(() => projectContextService.refresh()),
+    );
+
+    // Reset root detection when workspace folders change
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            projectContextService.resetRoot();
+            projectContextService.refresh();
+            projectContextService.detectProjectRoot().then((rootUri) => {
+                if (rootUri) {
+                    fileNavigationService.setProjectRoot(rootUri.fsPath);
+                }
+            });
+        })
     );
 
     // Initialize terminal service
@@ -36,14 +53,18 @@ export function activate(context: vscode.ExtensionContext) {
         dispose: () => chatService.dispose(),
     });
 
-    // Detect hermes CLI for chat
-    chatService.detectHermesPath().then(available => {
-        if (available) {
-            sidebarProvider.updateChatStatus('ready');
-        } else {
-            sidebarProvider.updateChatStatus('no-cli');
-        }
-    });
+    // Register sidebar webview (MUST be before any sidebarProvider usage)
+    sidebarProvider = new HermesSidebarProvider(context.extensionUri, projectContextService, fileNavigationService);
+    sidebarProvider.setTerminalService(terminalService);
+    sidebarProvider.setChatService(chatService);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            HermesSidebarProvider.viewType,
+            sidebarProvider
+        )
+    );
+
+    // Chat CLI status will be set by the shared detectHermesPath call below
 
     // Wire chat service events to sidebar
     chatService.on('message', (data: any) => {
@@ -58,6 +79,9 @@ export function activate(context: vscode.ExtensionContext) {
     chatService.on('error', (data: any) => {
         sidebarProvider.sendChatError(data);
     });
+    chatService.on('connectionStatus', (data: any) => {
+        sidebarProvider.updateConnectionStatus(data.status);
+    });
 
     // Sync project root with file navigation
     projectContextService.detectProjectRoot().then((rootUri) => {
@@ -65,34 +89,33 @@ export function activate(context: vscode.ExtensionContext) {
             fileNavigationService.setProjectRoot(rootUri.fsPath);
         }
     });
-    context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(() => {
-            projectContextService.refresh();
-            projectContextService.detectProjectRoot().then((rootUri) => {
-                if (rootUri) {
-                    fileNavigationService.setProjectRoot(rootUri.fsPath);
-                }
-            });
-        }),
-    );
 
-    // Detect hermes CLI path
-    terminalService.detectHermesPath().then(path => {
-        console.log(`Hermes CLI detected at: ${path}`);
-    }).catch(err => {
-        console.error('Failed to detect Hermes CLI:', err);
+    // Auto-send context when project context changes
+    projectContextService.onDidChangeContext(() => {
+        sidebarProvider.sendProjectContext();
     });
 
-    // Register sidebar webview
-    const sidebarProvider = new HermesSidebarProvider(context.extensionUri, projectContextService, fileNavigationService);
-    sidebarProvider.setTerminalService(terminalService);
-    sidebarProvider.setChatService(chatService);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(
-            HermesSidebarProvider.viewType,
-            sidebarProvider
-        )
-    );
+    // Detect hermes CLI path (once, shared between terminal and chat)
+    terminalService.detectHermesPath().then(path => {
+        console.log(`Hermes CLI detected at: ${path}`);
+        chatService.setHermesPath(path);
+        sidebarProvider.updateChatStatus('ready');
+    }).catch(() => {
+        chatService.detectHermesPath().then(available => {
+            if (available) {
+                sidebarProvider.updateChatStatus('ready');
+            } else {
+                sidebarProvider.updateChatStatus('no-cli');
+            }
+        });
+    });
+
+    // Check gateway availability in background
+    chatService.checkGateway().then(available => {
+        if (available) {
+            console.log(`Hermes gateway available at: ${chatService.getSettings().gatewayUrl}`);
+        }
+    });
 
     // Wire terminal service events to sidebar
     terminalService.on('output', (data: any) => {
@@ -117,6 +140,16 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('hermes.inspectContext', async () => {
             const summary = await projectContextService.getContextSummary();
             vscode.window.showInformationMessage(summary);
+        })
+    );
+
+    // Command to get structured context for Hermes API (debug)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('hermes.inspectContextJson', async () => {
+            const apiCtx = await projectContextService.formatForHermesApi();
+            const json = JSON.stringify(apiCtx, null, 2);
+            const doc = await vscode.workspace.openTextDocument({ content: json, language: 'json' });
+            await vscode.window.showTextDocument(doc);
         })
     );
 
@@ -165,7 +198,6 @@ export function activate(context: vscode.ExtensionContext) {
     for (const cmd of TerminalService.PREDEFINED_COMMANDS) {
         context.subscriptions.push(
             vscode.commands.registerCommand(cmd.id, async () => {
-                // Show output channel
                 terminalService.getOutputChannel().show(true);
 
                 const output = await terminalService.executeCommand(cmd.command, cmd.args);
@@ -198,7 +230,6 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Strip 'hermes ' prefix if user included it
             const cleanInput = input.trim().startsWith('hermes ')
                 ? input.trim().slice(7)
                 : input.trim();
@@ -207,7 +238,6 @@ export function activate(context: vscode.ExtensionContext) {
             const command = parts[0];
             const args = parts.slice(1);
 
-            // Show output channel
             terminalService.getOutputChannel().show(true);
 
             const output = await terminalService.executeCommand(command, args);

@@ -929,3 +929,244 @@ body {
   flex-shrink: 0;
   text-transform: uppercase;
 }
+
+/* Kanban */
+.kanban-header,
+.sessions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.kanban-header h3,
+.sessions-header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kanban-content,
+.sessions-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.kanban-raw {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+}
+
+/* Sessions */
+.session-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+  transition: background 0.1s;
+}
+
+.session-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.session-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.session-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.session-preview {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Settings panel */
+.settings-panel {
+  padding: 16px;
+}
+
+.settings-panel h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+
+.setting-group {
+  margin-bottom: 12px;
+}
+
+.setting-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.setting-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.setting-input:focus {
+  border-color: var(--accent);
+}
+
+/* Settings actions row */
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn-secondary {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+}
+
+/* Gateway status indicator */
+.gateway-status {
+  font-size: 11px;
+  margin-top: 4px;
+  padding: 2px 0;
+  min-height: 16px;
+}
+
+.gateway-status.available {
+  color: var(--success);
+}
+
+.gateway-status.unavailable {
+  color: var(--error);
+}
+
+.gateway-status.checking {
+  color: var(--warning);
+}
+
+/* Chat action bar (commands and file refs after streaming) */
+.chat-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  cursor: pointer;
+  transition: all 0.15s;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-action-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+}
+
+.chat-action-cmd.executed {
+  color: var(--success);
+  border-color: var(--success);
+  opacity: 0.7;
+}
+
+.chat-action-file {
+  color: var(--accent);
+}
+
+.chat-action-file:hover {
+  color: var(--accent-hover);
+}
+
+/* Chat retry button */
+.chat-retry-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--error);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chat-retry-btn:hover {
+  background: var(--error);
+  color: var(--bg-primary);
+}
+
+/* Connection status in chat */
+.chat-status-bar.connected .status-dot {
+  background: var(--success);
+}
+
+.chat-status-bar.connecting .status-dot {
+  background: var(--warning);
+  animation: pulse 1s infinite;
+}
+
+.chat-status-bar.error .status-dot {
+  background: var(--error);
+}
+
+.chat-status-bar.error {
+  color: var(--error);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
