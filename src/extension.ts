@@ -3,10 +3,12 @@ import { HermesSidebarProvider } from './sidebarProvider';
 import { ProjectContextService } from './projectContext';
 import { TerminalService } from './terminalService';
 import { FileNavigationService } from './fileNavigation';
+import { ChatService } from './chatService';
 
 let projectContextService: ProjectContextService;
 let terminalService: TerminalService;
 let fileNavigationService: FileNavigationService;
+let chatService: ChatService;
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize project context service
@@ -25,6 +27,36 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize file navigation service
     fileNavigationService = new FileNavigationService();
+
+    // Initialize chat service
+    chatService = ChatService.getInstance();
+    chatService.setProjectContext(projectContextService);
+    context.subscriptions.push({
+        dispose: () => chatService.dispose(),
+    });
+
+    // Detect hermes CLI for chat
+    chatService.detectHermesPath().then(available => {
+        if (available) {
+            sidebarProvider.updateChatStatus('ready');
+        } else {
+            sidebarProvider.updateChatStatus('no-cli');
+        }
+    });
+
+    // Wire chat service events to sidebar
+    chatService.on('message', (data: any) => {
+        sidebarProvider.sendChatMessage(data);
+    });
+    chatService.on('stream', (data: any) => {
+        sidebarProvider.sendChatStream(data);
+    });
+    chatService.on('complete', (data: any) => {
+        sidebarProvider.sendChatComplete(data);
+    });
+    chatService.on('error', (data: any) => {
+        sidebarProvider.sendChatError(data);
+    });
 
     // Sync project root with file navigation
     projectContextService.detectProjectRoot().then((rootUri) => {
@@ -53,6 +85,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Register sidebar webview
     const sidebarProvider = new HermesSidebarProvider(context.extensionUri, projectContextService, fileNavigationService);
     sidebarProvider.setTerminalService(terminalService);
+    sidebarProvider.setChatService(chatService);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
             HermesSidebarProvider.viewType,
@@ -199,7 +232,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Hermes Cursor Extension v0.1.0 activated with sidebar, project context, terminal, and file navigation');
+    console.log('Hermes Cursor Extension v0.1.0 activated with sidebar, chat, project context, terminal, and file navigation');
 }
 
 export function deactivate() {

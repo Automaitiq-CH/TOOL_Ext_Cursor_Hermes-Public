@@ -3,12 +3,14 @@ import * as vscode from 'vscode';
 import { ProjectContextService } from './projectContext';
 import { TerminalService } from './terminalService';
 import { FileNavigationService } from './fileNavigation';
+import { ChatService } from './chatService';
 
 export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'hermesSidebar';
   private view?: vscode.WebviewView;
   private terminalService?: TerminalService;
   private fileNavigation?: FileNavigationService;
+  private chatService?: ChatService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -20,6 +22,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
   public setTerminalService(service: TerminalService) {
     this.terminalService = service;
+  }
+
+  public setChatService(service: ChatService) {
+    this.chatService = service;
   }
 
   public resolveWebviewView(
@@ -71,6 +77,20 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'switchEditor':
           this.handleSwitchEditor(message.direction);
+          break;
+        case 'sendMessage':
+          this.handleSendMessage(message.text);
+          break;
+        case 'saveSettings':
+          this.handleSaveSettings(message.settings);
+          break;
+        case 'cancelStreaming':
+          this.chatService?.cancelStreaming();
+          this.view?.webview.postMessage({ command: 'cancelStreaming' });
+          break;
+        case 'newChatSession':
+          const newId = this.chatService?.newSession() || '';
+          this.view?.webview.postMessage({ command: 'newChatSession', sessionId: newId });
           break;
         default:
           console.log(`Unknown message: ${message.command}`);
@@ -138,6 +158,53 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       console.error('Failed to get project context:', err);
     }
+  }
+
+  // --- Chat handlers ---
+
+  public async handleSendMessage(text: string) {
+    if (!this.chatService) {
+      console.error('Chat service not initialized');
+      return;
+    }
+    try {
+      await this.chatService.sendMessage(text);
+    } catch (err) {
+      console.error('Failed to send chat message:', err);
+      this.view?.webview.postMessage({ command: 'chatError', message: String(err) });
+    }
+  }
+
+  private handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string }) {
+    if (this.chatService) {
+      this.chatService.setSettings({
+        gatewayUrl: settings.gatewayUrl || 'http://localhost:8080',
+        profile: settings.profile || 'default',
+      });
+    }
+    // Save to VS Code global state
+    // (could be persisted later)
+    console.log('Settings saved:', settings);
+  }
+
+  public updateChatStatus(status: 'ready' | 'no-cli' | 'connecting') {
+    this.view?.webview.postMessage({ command: 'chatStatus', status });
+  }
+
+  public sendChatMessage(data: any) {
+    this.view?.webview.postMessage({ command: 'chatMessage', data });
+  }
+
+  public sendChatStream(data: any) {
+    this.view?.webview.postMessage({ command: 'chatStream', data });
+  }
+
+  public sendChatComplete(data: any) {
+    this.view?.webview.postMessage({ command: 'chatComplete', data });
+  }
+
+  public sendChatError(data: any) {
+    this.view?.webview.postMessage({ command: 'chatError', data });
   }
 
   // --- File navigation handlers ---
@@ -263,24 +330,31 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
     <main class="sidebar-content">
       <section id="tab-chat" class="tab-content active">
-        <div class="empty-state">
+        <div id="chat-welcome" class="chat-welcome">
           <div class="empty-icon">&#9889;</div>
-          <h2>Welcome to Hermes</h2>
-          <p>Connect to your Hermes gateway to start chatting, managing tasks, and running skills from Cursor.</p>
-          <button id="btn-connect" class="btn-primary">Connect Gateway</button>
+          <h2>Hermes Chat</h2>
+          <p>Ask questions about your codebase. Hermes has context about your open files and project.</p>
+          <div id="chat-status-bar" class="chat-status-bar">
+            <span class="status-dot"></span>
+            <span id="chat-status-text">Checking Hermes...</span>
+          </div>
         </div>
         <div id="chat-area" class="chat-area hidden">
           <div id="chat-messages" class="chat-messages"></div>
-          <form id="chat-form" class="chat-form">
-            <input
-              id="chat-input"
-              type="text"
-              placeholder="Ask Hermes anything..."
-              class="chat-input"
-              autocomplete="off"
-            />
-            <button type="submit" class="btn-send" title="Send">&#9654;</button>
-          </form>
+          <div id="chat-input-area" class="chat-input-area">
+            <form id="chat-form" class="chat-form">
+              <textarea
+                id="chat-input"
+                placeholder="Ask Hermes anything..."
+                class="chat-textarea"
+                rows="1"
+                autocomplete="off"
+              ></textarea>
+              <button type="submit" id="btn-send" class="btn-send" title="Send">&#9654;</button>
+              <button type="button" id="btn-cancel" class="btn-cancel hidden" title="Cancel">&#9585;</button>
+            </form>
+            <div class="chat-hint">Press Enter to send, Shift+Enter for new line</div>
+          </div>
         </div>
       </section>
 
@@ -440,6 +514,19 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         });
       });
 
+      // Chat state
+      let chatInitialized = false;
+      let currentStreamingMsgId = null;
+      const chatMessages = document.getElementById('chat-messages');
+      const chatForm = document.getElementById('chat-form');
+      const chatInput = document.getElementById('chat-input');
+      const chatArea = document.getElementById('chat-area');
+      const chatWelcome = document.getElementById('chat-welcome');
+      const btnSend = document.getElementById('btn-send');
+      const btnCancel = document.getElementById('btn-cancel');
+      const chatStatusBar = document.getElementById('chat-status-bar');
+      const chatStatusText = document.getElementById('chat-status-text');
+
       // Connection status updates from extension
       window.addEventListener('message', event => {
         const { command, status, data } = event.data;
@@ -468,7 +555,199 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         if (command === 'openFiles') {
           renderOpenFilesBar(data.files, data.activeFile);
         }
+        // Chat status (ready / no-cli)
+        if (command === 'chatStatus') {
+          initChatArea(status);
+        }
+        // Chat message (user or assistant)
+        if (command === 'chatMessage') {
+          appendChatMessage(data.message);
+        }
+        // Streaming update
+        if (command === 'chatStream') {
+          updateStreamingMessage(data.messageId, data.content);
+        }
+        // Chat complete
+        if (command === 'chatComplete') {
+          finishStreamingMessage();
+        }
+        // Chat error
+        if (command === 'chatError') {
+          showChatError(data.message || data.error || 'Unknown error');
+        }
+        // Cancel streaming
+        if (command === 'cancelStreaming') {
+          finishStreamingMessage();
+          setStreamingState(false);
+        }
       });
+
+      // Initialize chat area when Hermes CLI is detected
+      function initChatArea(status) {
+        if (chatInitialized) return;
+        chatInitialized = true;
+
+        if (status === 'ready') {
+          // Show chat area, hide welcome
+          if (chatArea) chatArea.classList.remove('hidden');
+          if (chatWelcome) chatWelcome.classList.add('hidden');
+          if (chatStatusText) {
+            chatStatusText.textContent = 'Hermes ready';
+          }
+          if (chatStatusBar) {
+            chatStatusBar.classList.add('ready');
+          }
+        } else {
+          // CLI not found
+          if (chatStatusText) {
+            chatStatusText.textContent = 'Hermes CLI not found in PATH';
+          }
+          if (chatStatusBar) {
+            chatStatusBar.classList.add('error');
+          }
+        }
+      }
+
+      // Append a chat message bubble
+      function appendChatMessage(msg) {
+        if (!chatMessages) return;
+        // Auto-show chat area on first message
+        if (chatArea && chatArea.classList.contains('hidden')) {
+          chatArea.classList.remove('hidden');
+          if (chatWelcome) chatWelcome.classList.add('hidden');
+        }
+
+        const div = document.createElement('div');
+        div.className = 'chat-bubble ' + (msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-assistant');
+        div.dataset.msgId = msg.id;
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'chat-bubble-content';
+        contentDiv.innerHTML = formatMessageContent(msg.content, msg.role);
+        div.appendChild(contentDiv);
+
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'chat-bubble-time';
+        timeDiv.textContent = formatTime(msg.timestamp);
+        div.appendChild(timeDiv);
+
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        if (msg.role === 'assistant' && msg.streaming) {
+          currentStreamingMsgId = msg.id;
+        }
+      }
+
+      // Update streaming content
+      function updateStreamingMessage(msgId, content) {
+        var sel = '[data-msg-id="' + msgId + '"] .chat-bubble-content';
+        const el = chatMessages?.querySelector(sel);
+        if (el) {
+          el.innerHTML = formatMessageContent(content, 'assistant');
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+      }
+
+      // Finish streaming
+      function finishStreamingMessage() {
+        if (currentStreamingMsgId) {
+          const sel2 = '[data-msg-id="' + currentStreamingMsgId + '"]';
+          const el = chatMessages?.querySelector(sel2);
+          if (el) {
+            el.classList.remove('streaming');
+          }
+          currentStreamingMsgId = null;
+        }
+        setStreamingState(false);
+      }
+
+      // Show error message in chat
+      function showChatError(errorText) {
+        if (!chatMessages) return;
+        const div = document.createElement('div');
+        div.className = 'chat-bubble chat-bubble-error';
+        div.innerHTML =
+          '<div class="chat-bubble-content">⚠ ' + escapeHtml(errorText) + '</div>';
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        setStreamingState(false);
+      }
+
+      // Format message content (support markdown-ish code blocks)
+      function formatMessageContent(text, role) {
+        if (!text) return '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>';
+        let html = escapeHtml(text);
+        // Basic code block formatting — use string concat to avoid backtick issues
+        var bt3 = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+        html = html.replace(new RegExp(bt3 + '(\\w*)\\n([\\s\\S]*?)' + bt3, 'g'), '<code class="code-block"><pre>$2</pre></code>');
+        // Inline code
+        var bt = String.fromCharCode(96);
+        html = html.replace(new RegExp(bt + '([^' + bt + ']+)' + bt, 'g'), '<code class="inline-code">$1</code>');
+        // Line breaks
+        html = html.replace(/\n/g, '<br>');
+        return html;
+      }
+
+      // Format timestamp
+      function formatTime(ts) {
+        const d = new Date(ts);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      // Set streaming UI state (buttons, input)
+      function setStreamingState(isStreaming) {
+        if (isStreaming) {
+          if (btnSend) btnSend.classList.add('hidden');
+          if (btnCancel) btnCancel.classList.remove('hidden');
+          if (chatInput) { chatInput.disabled = true; chatInput.placeholder = 'Hermes is thinking...'; }
+        } else {
+          if (btnSend) btnSend.classList.remove('hidden');
+          if (btnCancel) btnCancel.classList.add('hidden');
+          if (chatInput) { chatInput.disabled = false; chatInput.placeholder = 'Ask Hermes anything...'; }
+        }
+      }
+
+      // Connect button (removed — auto-connects now)
+      document.getElementById('btn-connect')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'connect' });
+      });
+
+      // Chat form — send message
+      if (chatForm) {
+        chatForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          if (!chatInput) return;
+          const text = chatInput.value.trim();
+          if (!text) return;
+
+          chatInput.value = '';
+          chatInput.style.height = 'auto';
+          vscodeApi.postMessage({ command: 'sendMessage', text });
+          setStreamingState(true);
+        });
+      }
+
+      // Cancel streaming button
+      if (btnCancel) {
+        btnCancel.addEventListener('click', () => {
+          vscodeApi.postMessage({ command: 'cancelStreaming' });
+        });
+      }
+
+      // Auto-resize textarea
+      if (chatInput) {
+        chatInput.addEventListener('input', () => {
+          chatInput.style.height = 'auto';
+          chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+        });
+        chatInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            chatForm?.requestSubmit();
+          }
+        });
+      }
 
       // Quick command buttons
       document.querySelectorAll('.cmd-btn').forEach(btn => {
@@ -518,16 +797,6 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       // Connect button
       document.getElementById('btn-connect')?.addEventListener('click', () => {
         vscodeApi.postMessage({ command: 'connect' });
-      });
-
-      // Chat form
-      document.getElementById('chat-form')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const input = document.getElementById('chat-input');
-        if (input && input.value.trim()) {
-          vscodeApi.postMessage({ command: 'sendMessage', text: input.value.trim() });
-          input.value = '';
-        }
       });
 
       // Save settings

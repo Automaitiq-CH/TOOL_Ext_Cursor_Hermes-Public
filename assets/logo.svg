@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="wingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#818CF8"/>
+      <stop offset="100%" style="stop-color:#6366F1"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#4F46E5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="124" fill="#1E1E2E"/>
+
+  <!-- Left wing -->
+  <path d="M120 128 C90 90, 50 60, 30 45 C40 70, 55 95, 75 115 C60 100, 45 90, 35 85 C50 105, 70 120, 90 135 C80 125, 70 118, 62 114 C75 128, 95 142, 120 140 Z" fill="url(#wingGrad)" opacity="0.9"/>
+
+  <!-- Right wing -->
+  <path d="M136 128 C166 90, 206 60, 226 45 C216 70, 201 95, 181 115 C196 100, 211 90, 221 85 C206 105, 186 120, 166 135 C176 125, 186 118, 194 114 C181 128, 161 142, 136 140 Z" fill="url(#wingGrad)" opacity="0.9"/>
+
+  <!-- Core circle (Hermes orb) -->
+  <circle cx="128" cy="118" r="32" fill="url(#coreGrad)"/>
+
+  <!-- H letter (Hermes initial) -->
+  <text x="128" y="134" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-weight="700" font-size="40" fill="#E2E8F0">H</text>
+
+  <!-- Accent dots -->
+  <circle cx="128" cy="168" r="4" fill="#818CF8"/>
+  <circle cx="116" cy="168" r="3" fill="#818CF8" opacity="0.6"/>
+  <circle cx="140" cy="168" r="3" fill="#818CF8" opacity="0.6"/>
+</svg>
