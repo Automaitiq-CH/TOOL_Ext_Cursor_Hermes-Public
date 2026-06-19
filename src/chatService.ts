@@ -1,6 +1,7 @@
 import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
 import { promisify } from 'util';
+import * as vscode from 'vscode';
 import { ProjectContextService } from './projectContext';
 
 export interface ChatMessage {
@@ -26,6 +27,8 @@ export interface ChatSettings {
 
 export class ChatService extends EventEmitter {
   private static instance: ChatService | null = null;
+  private static readonly STORAGE_KEY = 'hermes.chat.sessions';
+  private static readonly ACTIVE_SESSION_KEY = 'hermes.chat.activeSession';
   private hermesPath: string = 'hermes';
   private activeProcess: ChildProcess | null = null;
   private activeSessionId: string | null = null;
@@ -37,6 +40,7 @@ export class ChatService extends EventEmitter {
     profile: 'default',
   };
   private cliDetected: boolean = false;
+  private storage: vscode.Memento | null = null;
 
   private constructor() {
     super();
@@ -49,12 +53,67 @@ export class ChatService extends EventEmitter {
     return ChatService.instance;
   }
 
+  /**
+   * Initialize persistence with VS Code global state.
+   * Called from extension.activate() to wire up the Memento.
+   */
+  public initStorage(storage: vscode.Memento): void {
+    this.storage = storage;
+    this.restoreSessions();
+  }
+
+  /**
+   * Restore sessions from persistent storage.
+   */
+  private restoreSessions(): void {
+    if (!this.storage) return;
+    try {
+      const saved = this.storage.get<Record<string, ChatSession>>(ChatService.STORAGE_KEY, {});
+      for (const [id, session] of Object.entries(saved)) {
+        this.sessions.set(id, session);
+      }
+      const activeId = this.storage.get<string>(ChatService.ACTIVE_SESSION_KEY, null);
+      if (activeId && this.sessions.has(activeId)) {
+        this.activeSessionId = activeId;
+      }
+    } catch {
+      // ignore corrupt data
+    }
+  }
+
+  /**
+   * Persist current sessions to VS Code global state.
+   */
+  private persistSessions(): void {
+    if (!this.storage) return;
+    try {
+      const obj: Record<string, ChatSession> = {};
+      for (const [id, session] of this.sessions) {
+        obj[id] = session;
+      }
+      this.storage.update(ChatService.STORAGE_KEY, obj);
+      if (this.activeSessionId) {
+        this.storage.update(ChatService.ACTIVE_SESSION_KEY, this.activeSessionId);
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }
+
   public setProjectContext(service: ProjectContextService) {
     this.projectContext = service;
   }
 
   public setSettings(settings: ChatSettings) {
     this.settings = { ...this.settings, ...settings };
+  }
+
+  public setActiveSession(id: string) {
+    this.activeSessionId = id;
+  }
+
+  public getActiveSessionId(): string | null {
+    return this.activeSessionId;
   }
 
   /**
@@ -119,6 +178,7 @@ export class ChatService extends EventEmitter {
     };
     session.messages.push(userMsg);
     session.updatedAt = Date.now();
+    this.persistSessions();
     this.emit('message', { sessionId: sessionKey, message: userMsg });
 
     // Create streaming placeholder for assistant response
@@ -200,6 +260,7 @@ export class ChatService extends EventEmitter {
           this.emit('complete', { sessionId, messageId: msgId, content: msg.content, exitCode: code });
         }
         session.updatedAt = Date.now();
+        this.persistSessions();
       }
     });
 
@@ -311,6 +372,7 @@ export class ChatService extends EventEmitter {
       updatedAt: Date.now(),
     });
     this.activeSessionId = id;
+    this.persistSessions();
     this.emit('newSession', { sessionId: id });
     return id;
   }

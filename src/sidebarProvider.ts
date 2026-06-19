@@ -45,6 +45,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       switch (message.command) {
         case 'ready':
           console.log('Hermes sidebar webview ready');
+          this.sendRestoredSession();
           break;
         case 'executeCommand':
           this.handleExecuteCommand(message.commandId, message.args);
@@ -78,7 +79,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           this.handleSwitchEditor(message.direction);
           break;
         case 'sendMessage':
-          this.handleSendMessage(message.text);
+          this.handleSendMessage(message.text, message.sessionId);
           break;
         case 'saveSettings':
           this.handleSaveSettings(message.settings);
@@ -162,12 +163,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
   // --- Chat handlers ---
 
-  public async handleSendMessage(text: string) {
+  public async handleSendMessage(text: string, sessionId?: string) {
     if (!this.chatService) {
       console.error('Chat service not initialized');
       return;
     }
     try {
+      if (sessionId) {
+        this.chatService.setActiveSession(sessionId);
+      }
       await this.chatService.sendMessage(text);
     } catch (err) {
       console.error('Failed to send chat message:', err);
@@ -205,6 +209,21 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
   public sendChatError(data: any) {
     this.view?.webview.postMessage({ command: 'chatError', data });
+  }
+
+  public sendRestoredSession() {
+    if (!this.chatService || !this.view) return;
+    const activeId = this.chatService.getActiveSessionId();
+    if (!activeId) return;
+    const msgs = this.chatService.getSessionMessages(activeId);
+    if (msgs.length === 0) return;
+    const session = this.chatService.getSessions().find(s => s.id === activeId);
+    this.view.webview.postMessage({
+      command: 'restoreSession',
+      sessionId: activeId,
+      messages: msgs,
+      title: session?.title || 'Hermes Chat',
+    });
   }
 
   // --- File navigation handlers ---
@@ -340,6 +359,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           </div>
         </div>
         <div id="chat-area" class="chat-area hidden">
+          <div class="chat-header">
+            <span class="chat-header-title" id="chat-header-title">Hermes Chat</span>
+            <button type="button" id="btn-new-chat" class="btn-new-chat" title="New chat session">+ New</button>
+          </div>
           <div id="chat-messages" class="chat-messages"></div>
           <div id="chat-input-area" class="chat-input-area">
             <form id="chat-form" class="chat-form">
@@ -517,6 +540,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       // Chat state
       let chatInitialized = false;
       let currentStreamingMsgId = null;
+      let activeSessionId = null;
       const chatMessages = document.getElementById('chat-messages');
       const chatForm = document.getElementById('chat-form');
       const chatInput = document.getElementById('chat-input');
@@ -526,6 +550,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       const btnCancel = document.getElementById('btn-cancel');
       const chatStatusBar = document.getElementById('chat-status-bar');
       const chatStatusText = document.getElementById('chat-status-text');
+      const chatHeaderTitle = document.getElementById('chat-header-title');
 
       // Connection status updates from extension
       window.addEventListener('message', event => {
@@ -580,6 +605,26 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           finishStreamingMessage();
           setStreamingState(false);
         }
+        // New chat session from backend
+        if (command === 'newChatSession') {
+          resetChatUI();
+          activeSessionId = data?.sessionId || null;
+          if (chatHeaderTitle) chatHeaderTitle.textContent = 'Hermes Chat';
+        }
+        // Restore persisted session on webview ready
+        if (command === 'restoreSession') {
+          activeSessionId = data.sessionId;
+          if (chatHeaderTitle) chatHeaderTitle.textContent = data.title || 'Hermes Chat';
+          // Show chat area, hide welcome
+          if (chatArea) chatArea.classList.remove('hidden');
+          if (chatWelcome) chatWelcome.classList.add('hidden');
+          chatInitialized = true;
+          // Render all messages
+          if (chatMessages) chatMessages.innerHTML = '';
+          for (const msg of (data.messages || [])) {
+            appendChatMessage(msg);
+          }
+        }
       });
 
       // Initialize chat area when Hermes CLI is detected
@@ -615,6 +660,11 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         if (chatArea && chatArea.classList.contains('hidden')) {
           chatArea.classList.remove('hidden');
           if (chatWelcome) chatWelcome.classList.add('hidden');
+        }
+
+        // Update header title on first user message
+        if (msg.role === 'user' && !activeSessionId) {
+          updateChatTitle(msg.content);
         }
 
         const div = document.createElement('div');
@@ -668,10 +718,26 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         const div = document.createElement('div');
         div.className = 'chat-bubble chat-bubble-error';
         div.innerHTML =
-          '<div class="chat-bubble-content">⚠ ' + escapeHtml(errorText) + '</div>';
+          '<div class="chat-bubble-content">&#9888; ' + escapeHtml(errorText) + '</div>';
         chatMessages.appendChild(div);
         chatMessages.scrollTop = chatMessages.scrollHeight;
         setStreamingState(false);
+      }
+
+      // Reset chat UI for new session
+      function resetChatUI() {
+        if (chatMessages) chatMessages.innerHTML = '';
+        currentStreamingMsgId = null;
+        setStreamingState(false);
+        if (chatInput) { chatInput.disabled = false; chatInput.value = ''; chatInput.placeholder = 'Ask Hermes anything...'; }
+        if (chatInput) chatInput.style.height = 'auto';
+      }
+
+      // Update chat header title from first user message
+      function updateChatTitle(text) {
+        if (!chatHeaderTitle) return;
+        const preview = text.slice(0, 40);
+        chatHeaderTitle.textContent = preview + (text.length > 40 ? '...' : '');
       }
 
       // Format message content (support markdown-ish code blocks)
@@ -723,10 +789,19 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
           chatInput.value = '';
           chatInput.style.height = 'auto';
-          vscodeApi.postMessage({ command: 'sendMessage', text });
+          vscodeApi.postMessage({ command: 'sendMessage', text, sessionId: activeSessionId });
           setStreamingState(true);
+          // Track that we have an active session now
+          if (!activeSessionId) {
+            updateChatTitle(text);
+          }
         });
       }
+
+      // New chat button
+      document.getElementById('btn-new-chat')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'newChatSession' });
+      });
 
       // Cancel streaming button
       if (btnCancel) {

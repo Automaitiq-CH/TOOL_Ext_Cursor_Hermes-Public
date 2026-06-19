@@ -30,6 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize chat service
     chatService = ChatService.getInstance();
+    chatService.initStorage(context.globalState);
     chatService.setProjectContext(projectContextService);
     context.subscriptions.push({
         dispose: () => chatService.dispose(),
