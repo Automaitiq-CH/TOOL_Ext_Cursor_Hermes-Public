@@ -33,7 +33,7 @@
   </defs>
 
   <!-- Background -->
-  <rect width="256" height="256" rx="48" fill="url(#bgGrad)"/>
+  <rect width="256" height="256" fill="url(#bgGrad)"/>
 
   <!-- Subtle glow behind core -->
   <circle cx="128" cy="120" r="56" fill="url(#glowGrad)"/>

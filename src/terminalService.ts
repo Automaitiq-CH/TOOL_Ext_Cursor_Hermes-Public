@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
 import { promisify } from 'util';
+import { buildHermesInvocation } from './hermesRunner';
 
 export interface TerminalOutput {
   id: string;
@@ -25,6 +26,11 @@ export class TerminalService extends EventEmitter {
   private processes: Map<string, ChildProcess> = new Map();
   private outputs: TerminalOutput[] = [];
   private hermesPath: string = 'hermes';
+  private sshTarget: string = '';
+  private sshPort: string = '';
+  private sshUser: string = '';
+  private sshKey: string = '';
+  private hermesHome: string = '';
   private outputChannel: vscode.OutputChannel;
 
   private constructor(outputChannel?: vscode.OutputChannel) {
@@ -37,6 +43,34 @@ export class TerminalService extends EventEmitter {
       TerminalService.instance = new TerminalService(outputChannel);
     }
     return TerminalService.instance;
+  }
+
+  /**
+   * Override the hermes CLI path (e.g. from a manual Settings entry).
+   */
+  public setHermesPath(path: string): void {
+    if (path && path.trim()) {
+      this.hermesPath = path.trim();
+    }
+  }
+
+  /**
+   * Configure an SSH destination so hermes commands run on a remote host.
+   * Empty string runs commands locally.
+   */
+  public setSshTarget(target: string): void {
+    this.sshTarget = (target || '').trim();
+  }
+
+  /**
+   * Configure the full SSH connection used to reach a remote hermes.
+   */
+  public setSshConfig(config: { host?: string; port?: string; user?: string; key?: string; home?: string }): void {
+    this.sshTarget = (config.host || '').trim();
+    this.sshPort = (config.port || '').trim();
+    this.sshUser = (config.user || '').trim();
+    this.sshKey = (config.key || '').trim();
+    this.hermesHome = (config.home || '').trim();
   }
 
   /**
@@ -108,10 +142,20 @@ export class TerminalService extends EventEmitter {
     this.emit('status', { id, status: 'running', command: `${command} ${args.join(' ')}` });
 
     return new Promise((resolve) => {
-      const fullArgs = [command, ...args];
-      const child = spawn(this.hermesPath, fullArgs, {
+      // Callers pass the hermes subcommand as `command` (e.g. "status"); some
+      // also redundantly prefix "hermes" — strip it so we don't run `hermes hermes ...`.
+      const hermesArgs = command === 'hermes' ? args : [command, ...args];
+      const inv = buildHermesInvocation({
+        hermesPath: this.hermesPath,
+        sshTarget: this.sshTarget,
+        sshPort: this.sshPort,
+        sshUser: this.sshUser,
+        sshKey: this.sshKey,
+        hermesHome: this.hermesHome,
+      }, hermesArgs);
+      const child = spawn(inv.command, inv.args, {
         cwd: cwd || process.cwd(),
-        env: { ...process.env },
+        env: { ...process.env, ...(inv.env || {}) },
         timeout,
       });
 

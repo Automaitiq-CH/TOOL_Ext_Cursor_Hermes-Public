@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo-256.png" alt="Hermes Agent" width="128" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/assets/logo-256.png" alt="Hermes Agent" width="128" />
 </p>
 
 <h1 align="center">Hermes Agent for Cursor & VS Code</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes/releases"><img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version" /></a>
+  <a href="https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes/releases"><img src="https://img.shields.io/badge/version-0.1.6-blue.svg" alt="Version" /></a>
   <a href="https://code.visualstudio.com/updates/v1_85"><img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blueviolet.svg" alt="VS Code" /></a>
   <a href="https://cursor.com"><img src="https://img.shields.io/badge/Cursor-compatible-green.svg" alt="Cursor" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
@@ -20,15 +20,15 @@
 Bring the full power of [Hermes Agent](https://github.com/NousResearch/hermes-agent) directly into your Cursor or VS Code editor. Chat with your AI agent, manage kanban tasks, search sessions, execute commands, navigate files, and monitor your workflow — all from a native sidebar.
 
 <p align="center">
-  <img src="screenshots/chat_conversation.png" alt="Chat with Hermes" width="600" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/chat_conversation.png" alt="Chat with Hermes" width="600" />
 </p>
 
 <p align="center">
-  <a href="screenshots/demo_video.mp4">▶ Watch the demo video (67s)</a>
+  <a href="https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes/raw/main/screenshots/demo_video.mp4">▶ Watch the demo video (67s)</a>
 </p>
 
 <p align="center">
-  <img src="screenshots/demo.gif" alt="Hermes Agent demo" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/demo.gif" alt="Hermes Agent demo" width="300" />
 </p>
 
 ## Table of Contents
@@ -131,7 +131,7 @@ The Chat feature connects to your local Hermes Agent gateway:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Gateway URL | `http://localhost:8080` | URL of your Hermes gateway |
+| Gateway URL | empty | Optional URL of your Hermes gateway |
 | Profile | `default` | Hermes profile to use |
 
 These can be adjusted from the **Settings** tab in the sidebar.
@@ -159,7 +159,7 @@ You can also run **custom commands** by typing any Hermes CLI command in the sid
 
 ### Opening the Sidebar
 
-The Hermes Agent icon <img src="assets/activitybar-icon.png" width="16" /> appears in the **Activity Bar** on the left side of your editor. Click it to open the sidebar.
+The Hermes Agent icon <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/assets/activitybar-icon.png" width="16" /> appears in the **Activity Bar** on the left side of your editor. Click it to open the sidebar.
 
 Alternatively, use the command palette:
 - `Cmd+Shift+P` (macOS) / `Ctrl+Shift+P` (Linux/Windows)
@@ -182,7 +182,7 @@ Chat features:
 - **Context-aware** — project context is automatically prepended to your prompts
 
 <p align="center">
-  <img src="screenshots/chat_welcome.png" alt="Chat Welcome Screen" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/chat_welcome.png" alt="Chat Welcome Screen" width="300" />
 </p>
 
 ### Running Terminal Commands
@@ -195,7 +195,7 @@ From the **Terminal** tab:
 To view the full output channel: Command palette → **Hermes: Show Output Channel**
 
 <p align="center">
-  <img src="screenshots/terminal.png" alt="Terminal Tab" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/terminal.png" alt="Terminal Tab" width="300" />
 </p>
 
 ### Viewing Kanban Tasks
@@ -207,7 +207,7 @@ From the **Kanban** tab:
 - Click a task to see its details
 
 <p align="center">
-  <img src="screenshots/kanban.png" alt="Kanban Tab" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/kanban.png" alt="Kanban Tab" width="300" />
 </p>
 
 ### Browsing Files
@@ -220,7 +220,7 @@ From the **Files** tab:
 - Switch between open editors with the left/right arrows
 
 <p align="center">
-  <img src="screenshots/files.png" alt="Files Tab" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/files.png" alt="Files Tab" width="300" />
 </p>
 
 ---
@@ -270,7 +270,7 @@ Workspace file navigation with complete file listing, real-time search/filter, o
 Configure the extension: gateway URL, profile selection, and other preferences.
 
 <p align="center">
-  <img src="screenshots/settings.png" alt="Settings Tab" width="300" />
+  <img src="https://raw.githubusercontent.com/Automaitiq/TOOL_Ext_Cursor_Hermes/main/screenshots/settings.png" alt="Settings Tab" width="300" />
 </p>
 
 ---
@@ -387,7 +387,7 @@ The extension cannot locate the `hermes` command in your `PATH`.
 ### Chat Not Streaming / No Response
 
 - Ensure the Hermes gateway is running (`hermes status` should succeed)
-- Check the gateway URL in the **Settings** tab (default: `http://localhost:8080`)
+- Check the gateway URL in the **Settings** tab if you use gateway mode
 - Verify the correct profile is selected
 - Check the Hermes output channel for errors: **Hermes: Show Output Channel**
 
@@ -456,7 +456,7 @@ We welcome contributions! Here's how to get started:
 
 MIT — see the [LICENSE](LICENSE) file for details.
 
-Built by [Automaitiq](https://automaitiq.com) with ❤️
+Built by [Automaitiq](https://automaitiq.ch) with ❤️
 
 ---
 

@@ -2,11 +2,11 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent for Cursor & VS Code",
   "description": "Integrate Hermes Agent directly into your Cursor editor — manage kanban tasks, search sessions, run skills, and more.",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "publisher": "automaitiq",
   "author": {
     "name": "Automaitiq",
-    "email": "contact@automaitiq.com"
+    "email": "contact@automaitiq.ch"
   },
   "license": "MIT",
   "repository": {
@@ -28,18 +28,23 @@
   ],
   "badges": [
     {
-      "url": "https://img.shields.io/badge/version-0.1.0-blue.svg",
+      "url": "https://img.shields.io/badge/version-0.1.6-blue.svg",
       "href": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes",
-      "description": "Version 0.1.0"
+      "description": "Version 0.1.6"
     }
   ],
+  "preview": true,
+  "qna": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes/issues",
   "keywords": [
     "hermes",
     "ai",
     "agent",
     "kanban",
     "automation",
-    "coding assistant"
+    "coding assistant",
+    "cursor",
+    "ai-agent",
+    "task-management"
   ],
   "activationEvents": [
     "onView:hermesSidebar"
@@ -97,7 +102,7 @@
         {
           "id": "hermes",
           "title": "Hermes Agent",
-          "icon": "assets/activitybar-icon.png"
+          "icon": "assets/activitybar-icon.svg"
         }
       ]
     },
@@ -121,14 +126,15 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
-    "eslint": "^8.55.0",
-    "typescript": "^5.3.2",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.0",
+    "eslint": "^8.55.0",
+    "ovsx": "^1.0.1",
+    "typescript": "^5.3.2",
     "vsce": "^2.15.0"
   }
 }

@@ -51,6 +51,12 @@ export interface HermesApiContext {
     fileCount: number;
     languages: string[];
   };
+  contextAccess?: {
+    mode: 'minimal' | 'workspace' | 'full';
+    description: string;
+    allowWorkspaceRead: boolean;
+  };
+  workspaceFiles?: string[];
   timestamp: number;
 }
 
@@ -284,10 +290,11 @@ export class ProjectContextService {
   /**
    * Format the full context as a structured object for the Hermes API.
    */
-  public async formatForHermesApi(): Promise<HermesApiContext> {
+  public async formatForHermesApi(mode: 'minimal' | 'workspace' | 'full' = 'workspace'): Promise<HermesApiContext> {
     const ctx = await this.getContext();
-    const keyFiles = await this.readKeyFileContents(ctx.projectRoot);
+    const keyFiles = mode === 'minimal' ? [] : await this.readKeyFileContents(ctx.projectRoot);
     const projectType = await this.detectProjectType(ctx.projectRoot);
+    const workspaceFiles = mode === 'full' ? await this.listProjectFiles(1000) : undefined;
 
     return {
       project: {
@@ -301,13 +308,24 @@ export class ProjectContextService {
       },
       git: ctx.git,
       keyFiles,
-      openFiles: ctx.openFiles,
+      openFiles: mode === 'minimal' ? (ctx.activeFile ? [ctx.activeFile] : []) : ctx.openFiles,
       activeFile: ctx.activeFile,
       activeSelection: ctx.activeSelection,
       stats: {
         fileCount: ctx.fileCount,
         languages: ctx.languages,
       },
+      contextAccess: {
+        mode,
+        description:
+          mode === 'minimal'
+            ? 'Minimal: active file metadata and selected text only.'
+            : mode === 'full'
+              ? 'Full project: workspace metadata, key files, file index, and permission for the CLI to read workspace files.'
+              : 'Workspace: open files, selected text, key project files, Git status, and project stats.',
+        allowWorkspaceRead: mode === 'full',
+      },
+      workspaceFiles,
       timestamp: Date.now(),
     };
   }
@@ -663,6 +681,22 @@ export class ProjectContextService {
       };
     } catch {
       return { fileCount: 0, languages: [] };
+    }
+  }
+
+  private async listProjectFiles(limit: number): Promise<string[]> {
+    try {
+      const files = await vscode.workspace.findFiles(
+        `**/*`,
+        `{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/out/**,**/*.lock,**/venv/**,**/.venv/**}`,
+        limit
+      );
+      const rootPath = (await this.detectProjectRoot())?.fsPath;
+      return files
+        .map((file) => rootPath ? path.relative(rootPath, file.fsPath) : file.fsPath)
+        .sort();
+    } catch {
+      return [];
     }
   }
 }

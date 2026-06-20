@@ -10,6 +10,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   private terminalService?: TerminalService;
   private fileNavigation?: FileNavigationService;
   private chatService?: ChatService;
+  // Last known statuses, replayed when the webview signals it is ready.
+  // The webview can resolve after these are first emitted, so we must re-send.
+  private lastChatStatus: 'ready' | 'no-cli' | 'connecting' | null = null;
+  private lastConnectionStatus: string | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -46,7 +50,16 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
           console.log('Hermes sidebar webview ready');
           this.sendRestoredSession();
+          this.sendChatHistory();
           this.sendProjectContext();
+          this.sendSettings();
+          // Replay statuses that may have been emitted before the webview was listening.
+          if (this.lastChatStatus) {
+            this.view?.webview.postMessage({ command: 'chatStatus', status: this.lastChatStatus });
+          }
+          if (this.lastConnectionStatus) {
+            this.view?.webview.postMessage({ command: 'connectionStatus', status: this.lastConnectionStatus });
+          }
           break;
         case 'getContext':
           this.sendProjectContext();
@@ -88,6 +101,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'saveSettings':
           this.handleSaveSettings(message.settings);
           break;
+        case 'selectSshKey':
+          this.handleSelectSshKey();
+          break;
+        case 'loadChatHistory':
+          this.sendChatHistory();
+          break;
+        case 'openChatSession':
+          this.handleOpenChatSession(message.sessionId);
+          break;
         case 'loadKanban':
           this.handleLoadKanban();
           break;
@@ -101,6 +123,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'newChatSession': {
           const newId = this.chatService?.newSession() || '';
           this.view?.webview.postMessage({ command: 'newChatSession', sessionId: newId });
+          this.sendChatHistory();
           break;
         }
         case 'retryLastMessage':
@@ -176,9 +199,10 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
+      const contextMode = this.chatService?.getSettings().contextMode || 'workspace';
       const [summary, apiContext] = await Promise.all([
         this.projectContext.getContextSummary(),
-        this.projectContext.formatForHermesApi(),
+        this.projectContext.formatForHermesApi(contextMode),
       ]);
       this.view.webview.postMessage({
         command: 'projectContext',
@@ -208,16 +232,94 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string; transport?: string }) {
-    if (this.chatService) {
-      this.chatService.setSettings({
-        gatewayUrl: settings.gatewayUrl || 'http://localhost:8080',
-        profile: settings.profile || 'default',
-        transport: (settings.transport as any) || 'auto',
-        apiKey: settings.apiKey,
-      });
+  private async handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string; transport?: string; contextMode?: string; cliPath?: string; sshTarget?: string; sshPort?: string; sshUser?: string; sshKey?: string; hermesHome?: string }) {
+    if (!this.chatService) return;
+
+    const cliPath = (settings.cliPath || '').trim();
+    const sshTarget = (settings.sshTarget || '').trim();
+    const sshPort = (settings.sshPort || '').trim();
+    const sshUser = (settings.sshUser || '').trim();
+    const sshKey = (settings.sshKey || '').trim();
+    const hermesHome = (settings.hermesHome || '').trim();
+    this.chatService.setSettings({
+      gatewayUrl: (settings.gatewayUrl || '').trim(),
+      profile: settings.profile || 'default',
+      transport: (settings.transport as any) || 'auto',
+      contextMode: (settings.contextMode as any) || 'workspace',
+      apiKey: settings.apiKey,
+      cliPath,
+      sshTarget,
+      sshPort,
+      sshUser,
+      sshKey,
+      hermesHome,
+    });
+    // Keep the Terminal tab in sync with the same SSH connection.
+    this.terminalService?.setSshConfig({ host: sshTarget, port: sshPort, user: sshUser, key: sshKey, home: hermesHome });
+    console.log('Settings saved (ssh:', sshTarget || '(local)', ', path:', cliPath || '(auto)', ')');
+
+    // Re-resolve hermes: SSH check, manual path, or PATH auto-detect.
+    const cliOk = await this.chatService.detectHermesPath();
+    if (cliOk && !sshTarget) {
+      this.terminalService?.setHermesPath(this.chatService.getHermesPath());
     }
-    console.log('Settings saved:', settings);
+
+    // Tell the settings panel whether hermes resolved.
+    this.view?.webview.postMessage({
+      command: 'cliPathStatus',
+      // null = pure auto-detect mode (no path and no ssh host)
+      valid: (cliPath || sshTarget) ? cliOk : null,
+      path: cliOk ? this.chatService.getHermesPath() : '',
+      ssh: sshTarget,
+    });
+
+    // Re-check the gateway and refresh the overall status.
+    const gatewayOk = await this.chatService.checkGateway();
+    const usable = cliOk || gatewayOk;
+    this.updateChatStatus(usable ? 'ready' : 'no-cli');
+    this.updateConnectionStatus(usable ? 'connected' : 'disconnected');
+  }
+
+  public sendSettings() {
+    if (!this.chatService || !this.view) return;
+    const s = this.chatService.getSettings();
+    this.view.webview.postMessage({
+      command: 'settingsData',
+      settings: {
+        gatewayUrl: s.gatewayUrl,
+        profile: s.profile,
+        transport: s.transport,
+        contextMode: s.contextMode || 'workspace',
+        apiKey: s.apiKey || '',
+        cliPath: s.cliPath || '',
+        sshTarget: s.sshTarget || '',
+        sshPort: s.sshPort || '',
+        sshUser: s.sshUser || '',
+        sshKey: s.sshKey || '',
+        hermesHome: s.hermesHome || '',
+      },
+    });
+  }
+
+  private async handleSelectSshKey() {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const defaultUri = home
+      ? vscode.Uri.file(vscode.Uri.joinPath(vscode.Uri.file(home), '.ssh').fsPath)
+      : undefined;
+
+    const selected = await vscode.window.showOpenDialog({
+      title: 'Select SSH private key',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      defaultUri,
+      openLabel: 'Choose key',
+    });
+
+    const keyPath = selected?.[0]?.fsPath;
+    if (keyPath) {
+      this.view?.webview.postMessage({ command: 'sshKeySelected', path: keyPath });
+    }
   }
 
   private async handleRetryLastMessage() {
@@ -288,15 +390,20 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public updateChatStatus(status: 'ready' | 'no-cli' | 'connecting') {
+    this.lastChatStatus = status;
     this.view?.webview.postMessage({ command: 'chatStatus', status });
   }
 
   public updateConnectionStatus(status: string) {
+    this.lastConnectionStatus = status;
     this.view?.webview.postMessage({ command: 'connectionStatus', status });
   }
 
   public sendChatMessage(data: any) {
     this.view?.webview.postMessage({ command: 'chatMessage', data });
+    if (data?.message?.role === 'user') {
+      this.sendChatHistory();
+    }
   }
 
   public sendChatStream(data: any) {
@@ -324,6 +431,37 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       messages: msgs,
       title: session?.title || 'Hermes Chat',
     });
+  }
+
+  public sendChatHistory() {
+    if (!this.chatService || !this.view) return;
+    const activeId = this.chatService.getActiveSessionId();
+    const sessions = this.chatService.getSessions().map((session) => {
+      const lastMessage = [...session.messages].reverse().find((m) => m.content && m.content.trim());
+      return {
+        id: session.id,
+        title: session.title || 'New Chat',
+        preview: lastMessage?.content || '',
+        updatedAt: session.updatedAt,
+        messageCount: session.messages.length,
+        active: session.id === activeId,
+      };
+    });
+    this.view.webview.postMessage({ command: 'chatHistoryData', sessions, activeSessionId: activeId });
+  }
+
+  private handleOpenChatSession(sessionId?: string) {
+    if (!this.chatService || !this.view || !sessionId) return;
+    this.chatService.setActiveSession(sessionId);
+    const msgs = this.chatService.getSessionMessages(sessionId);
+    const session = this.chatService.getSessions().find(s => s.id === sessionId);
+    this.view.webview.postMessage({
+      command: 'restoreSession',
+      sessionId,
+      messages: msgs,
+      title: session?.title || 'Hermes Chat',
+    });
+    this.sendChatHistory();
   }
 
   // --- File navigation handlers ---
@@ -395,6 +533,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     const stylesUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'assets', 'sidebar.css')
     );
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'src', 'assets', 'sidebar.js')
+    );
+    const logoUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'assets', 'logo-128.png')
+    );
+    const welcomeLogoUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'assets', 'logo-256.png')
+    );
     const nonce = getNonce();
 
     return /*html*/ `
@@ -402,7 +549,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}' ${webview.cspSource};">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${stylesUri}" nonce="${nonce}">
   <title>Hermes Agent</title>
@@ -411,7 +558,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   <div id="app">
     <header class="sidebar-header">
       <div class="logo">
-        <span class="logo-icon">&#9889;</span>
+        <img class="logo-icon" src="${logoUri}" alt="Hermes Agent logo" />
         <h1 class="logo-text">Hermes Agent</h1>
       </div>
       <div id="connection-status" class="status-badge connecting">
@@ -450,7 +597,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     <main class="sidebar-content">
       <section id="tab-chat" class="tab-content active">
         <div id="chat-welcome" class="chat-welcome">
-          <div class="empty-icon">&#9889;</div>
+          <img class="empty-icon welcome-logo" src="${welcomeLogoUri}" alt="Hermes Agent logo" />
           <h2>Hermes Chat</h2>
           <p>Ask questions about your codebase. Hermes has context about your open files and project.</p>
           <div id="chat-status-bar" class="chat-status-bar">
@@ -461,7 +608,19 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         <div id="chat-area" class="chat-area hidden">
           <div class="chat-header">
             <span class="chat-header-title" id="chat-header-title">Hermes Chat</span>
-            <button type="button" id="btn-new-chat" class="btn-new-chat" title="New chat session">+ New</button>
+            <div class="chat-header-actions">
+              <button type="button" id="btn-chat-history" class="btn-new-chat" title="Show chat history">History</button>
+              <button type="button" id="btn-new-chat" class="btn-new-chat" title="New chat session">+ New</button>
+            </div>
+          </div>
+          <div id="chat-history-panel" class="chat-history-panel hidden">
+            <div class="chat-history-header">
+              <span>Chat history</span>
+              <button type="button" id="btn-refresh-chat-history" class="btn-icon" title="Refresh chat history">&#8635;</button>
+            </div>
+            <div id="chat-history-list" class="chat-history-list">
+              <div class="empty-state compact"><p>No conversations yet.</p></div>
+            </div>
           </div>
           <div id="chat-messages" class="chat-messages"></div>
           <div id="chat-input-area" class="chat-input-area">
@@ -598,9 +757,43 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       <section id="tab-settings" class="tab-content">
         <div class="settings-panel">
           <h2>Settings</h2>
+          <div class="settings-section">
+            <h3 class="settings-section-title">Remote connection (SSH)</h3>
+            <div class="setting-row">
+              <div class="setting-group setting-grow">
+                <label for="ssh-target">Server</label>
+                <input id="ssh-target" type="text" placeholder="SSH host, IP, or alias" class="setting-input" autocomplete="off" />
+              </div>
+              <div class="setting-group setting-port">
+                <label for="ssh-port">Port</label>
+                <input id="ssh-port" type="text" placeholder="22" class="setting-input" autocomplete="off" />
+              </div>
+            </div>
+            <div class="setting-group">
+              <label for="ssh-user">Username</label>
+              <input id="ssh-user" type="text" placeholder="optional — uses ssh config if empty" class="setting-input" autocomplete="off" />
+            </div>
+            <div class="setting-group">
+              <label for="ssh-key">SSH Private Key</label>
+              <div class="setting-input-row">
+                <input id="ssh-key" type="text" placeholder="Optional private key path" class="setting-input" autocomplete="off" />
+                <button id="btn-choose-ssh-key" type="button" class="btn-secondary btn-choose-file">Choose…</button>
+              </div>
+            </div>
+            <div class="setting-group">
+              <label for="cli-path">CLI path</label>
+              <input id="cli-path" type="text" placeholder="Leave empty to use the CLI from PATH" class="setting-input" autocomplete="off" />
+              <div id="cli-path-status" class="gateway-status"></div>
+            </div>
+            <div class="setting-group">
+              <label for="hermes-home">Configuration directory (optional)</label>
+              <input id="hermes-home" type="text" placeholder="Optional custom configuration directory" class="setting-input" autocomplete="off" />
+            </div>
+            <div class="setting-hint">Leave Server empty to run locally. SSH uses key-based authentication. Leave paths empty to use the system defaults.</div>
+          </div>
           <div class="setting-group">
             <label for="gateway-url">Gateway URL</label>
-            <input id="gateway-url" type="text" placeholder="http://localhost:8080" class="setting-input" />
+            <input id="gateway-url" type="text" placeholder="Optional gateway URL" class="setting-input" />
             <div id="gateway-status" class="gateway-status"></div>
           </div>
           <div class="setting-group">
@@ -621,6 +814,15 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
               <option value="cli">CLI only</option>
             </select>
           </div>
+          <div class="setting-group">
+            <label for="context-mode">Context access</label>
+            <select id="context-mode" class="setting-input">
+              <option value="minimal">Minimal — active file and selection only</option>
+              <option value="workspace">Workspace — open files, key files, Git, stats</option>
+              <option value="full">Full project — include file index and allow workspace reads</option>
+            </select>
+            <div class="setting-hint">Controls what project context is sent to Hermes. Full project should be used only when you want Hermes to inspect files across the workspace.</div>
+          </div>
           <div class="settings-actions">
             <button id="btn-save-settings" class="btn-primary">Save Settings</button>
             <button id="btn-check-gateway" class="btn-secondary">Test Gateway</button>
@@ -630,735 +832,12 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     </main>
 
     <footer class="sidebar-footer">
-      <span>v0.1.0</span>
+      <span>v0.1.6</span>
       <a href="#" id="btn-open-docs" target="_blank">Docs</a>
     </footer>
   </div>
 
-  <script nonce="${nonce}">
-    (function() {
-      const vscodeApi = acquireVsCodeApi();
-      const terminalOutput = document.getElementById('terminal-output');
-      const commandOutputs = new Map();
-
-      // Send ready signal
-      window.addEventListener('load', () => {
-        vscodeApi.postMessage({ command: 'ready' });
-      });
-
-      // Navigation tabs
-      document.querySelectorAll('.nav-item').forEach(btn => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-          document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-          btn.classList.add('active');
-          const tabId = 'tab-' + btn.dataset.tab;
-          document.getElementById(tabId)?.classList.add('active');
-        });
-      });
-
-      // Chat state
-      let chatInitialized = false;
-      let currentStreamingMsgId = null;
-      let activeSessionId = null;
-      const chatMessages = document.getElementById('chat-messages');
-      const chatForm = document.getElementById('chat-form');
-      const chatInput = document.getElementById('chat-input');
-      const chatArea = document.getElementById('chat-area');
-      const chatWelcome = document.getElementById('chat-welcome');
-      const btnSend = document.getElementById('btn-send');
-      const btnCancel = document.getElementById('btn-cancel');
-      const chatStatusBar = document.getElementById('chat-status-bar');
-      const chatStatusText = document.getElementById('chat-status-text');
-      const chatHeaderTitle = document.getElementById('chat-header-title');
-
-      // Connection status updates from extension
-      window.addEventListener('message', event => {
-        const { command, status, data } = event.data;
-        if (command === 'status') {
-          const badge = document.getElementById('connection-status');
-          if (badge) {
-            badge.className = 'status-badge ' + status;
-            const text = badge.querySelector('.status-text');
-            const labels = { connected: 'Connected', disconnected: 'Disconnected', connecting: 'Connecting...' };
-            if (text) text.textContent = labels[status] || status;
-          }
-        }
-        if (command === 'terminalOutput') {
-          appendTerminalOutput(data);
-        }
-        if (command === 'clearTerminal') {
-          terminalOutput.innerHTML = '';
-          commandOutputs.clear();
-        }
-        if (command === 'workspaceFiles') {
-          renderFileList(data.files);
-        }
-        if (command === 'searchResults') {
-          renderFileList(data.files);
-        }
-        if (command === 'openFiles') {
-          renderOpenFilesBar(data.files, data.activeFile);
-        }
-        // Chat status (ready / no-cli)
-        if (command === 'chatStatus') {
-          initChatArea(status);
-        }
-        // Chat message (user or assistant)
-        if (command === 'chatMessage') {
-          appendChatMessage(data.message);
-        }
-        // Streaming update
-        if (command === 'chatStream') {
-          updateStreamingMessage(data.messageId, data.content);
-        }
-        // Chat complete
-        if (command === 'chatComplete') {
-          finishStreamingMessage();
-        }
-        // Chat error
-        if (command === 'chatError') {
-          showChatError(data.message || data.error || 'Unknown error');
-        }
-        // Connection status updates from chat service
-        if (command === 'connectionStatus') {
-          updateConnectionIndicator(status);
-        }
-        // Gateway check result
-        if (command === 'gatewayStatus') {
-          updateGatewayIndicator(data);
-        }
-        // Cancel streaming
-        if (command === 'cancelStreaming') {
-          finishStreamingMessage();
-          setStreamingState(false);
-        }
-        // New chat session from backend
-        if (command === 'newChatSession') {
-          resetChatUI();
-          activeSessionId = data?.sessionId || null;
-          if (chatHeaderTitle) chatHeaderTitle.textContent = 'Hermes Chat';
-        }
-        // Restore persisted session on webview ready
-        if (command === 'restoreSession') {
-          activeSessionId = data.sessionId;
-          if (chatHeaderTitle) chatHeaderTitle.textContent = data.title || 'Hermes Chat';
-          // Show chat area, hide welcome
-          if (chatArea) chatArea.classList.remove('hidden');
-          if (chatWelcome) chatWelcome.classList.add('hidden');
-          chatInitialized = true;
-          // Render all messages
-          if (chatMessages) chatMessages.innerHTML = '';
-          for (const msg of (data.messages || [])) {
-            appendChatMessage(msg);
-          }
-        }
-        // Kanban data loaded
-        if (command === 'kanbanData') {
-          renderKanban(data);
-        }
-        // Sessions data loaded
-        if (command === 'sessionsData') {
-          renderSessions(data.sessions || []);
-        }
-      });
-
-      // Initialize chat area when Hermes CLI is detected
-      function initChatArea(status) {
-        if (chatInitialized) return;
-        chatInitialized = true;
-
-        if (status === 'ready') {
-          // Show chat area, hide welcome
-          if (chatArea) chatArea.classList.remove('hidden');
-          if (chatWelcome) chatWelcome.classList.add('hidden');
-          if (chatStatusText) {
-            chatStatusText.textContent = 'Hermes ready';
-          }
-          if (chatStatusBar) {
-            chatStatusBar.classList.add('ready');
-          }
-        } else {
-          // CLI not found
-          if (chatStatusText) {
-            chatStatusText.textContent = 'Hermes CLI not found in PATH';
-          }
-          if (chatStatusBar) {
-            chatStatusBar.classList.add('error');
-          }
-        }
-      }
-
-      // Append a chat message bubble
-      function appendChatMessage(msg) {
-        if (!chatMessages) return;
-        // Auto-show chat area on first message
-        if (chatArea && chatArea.classList.contains('hidden')) {
-          chatArea.classList.remove('hidden');
-          if (chatWelcome) chatWelcome.classList.add('hidden');
-        }
-
-        // Update header title on first user message
-        if (msg.role === 'user' && !activeSessionId) {
-          updateChatTitle(msg.content);
-        }
-
-        const div = document.createElement('div');
-        div.className = 'chat-bubble ' + (msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-assistant');
-        div.dataset.msgId = msg.id;
-
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'chat-bubble-content';
-        contentDiv.innerHTML = formatMessageContent(msg.content, msg.role);
-        div.appendChild(contentDiv);
-
-        const timeDiv = document.createElement('div');
-        timeDiv.className = 'chat-bubble-time';
-        timeDiv.textContent = formatTime(msg.timestamp);
-        div.appendChild(timeDiv);
-
-        chatMessages.appendChild(div);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-
-        if (msg.role === 'assistant' && msg.streaming) {
-          currentStreamingMsgId = msg.id;
-        }
-      }
-
-      // Update streaming content
-      function updateStreamingMessage(msgId, content) {
-        var sel = '[data-msg-id="' + msgId + '"] .chat-bubble-content';
-        const el = chatMessages?.querySelector(sel);
-        if (el) {
-          el.innerHTML = formatMessageContent(content, 'assistant');
-          chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-      }
-
-      // Finish streaming and add action buttons
-      function finishStreamingMessage() {
-        if (currentStreamingMsgId) {
-          var sel2 = '[data-msg-id="' + currentStreamingMsgId + '"]';
-          var el = chatMessages?.querySelector(sel2);
-          if (el) {
-            el.classList.remove('streaming');
-          }
-          // Extract commands and file refs from the completed message
-          var contentEl = chatMessages?.querySelector(sel2 + ' .chat-bubble-content');
-          if (contentEl) {
-            addActionButtons(currentStreamingMsgId, contentEl.textContent || '');
-          }
-          currentStreamingMsgId = null;
-        }
-        setStreamingState(false);
-      }
-
-      // Show error message in chat with retry button
-      function showChatError(errorText) {
-        if (!chatMessages) return;
-        setStreamingState(false);
-
-        const div = document.createElement('div');
-        div.className = 'chat-bubble chat-bubble-error';
-
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'chat-bubble-content';
-        contentDiv.innerHTML = '&#9888; ' + escapeHtml(errorText);
-        div.appendChild(contentDiv);
-
-        // Retry button
-        const retryBtn = document.createElement('button');
-        retryBtn.className = 'chat-retry-btn';
-        retryBtn.textContent = '&#8635; Retry';
-        retryBtn.innerHTML = '&#8635; Retry';
-        retryBtn.title = 'Retry last message';
-        retryBtn.addEventListener('click', function() {
-          div.remove();
-          vscodeApi.postMessage({ command: 'retryLastMessage' });
-          setStreamingState(true);
-        });
-        div.appendChild(retryBtn);
-
-        chatMessages.appendChild(div);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-      }
-
-      // Reset chat UI for new session
-      function resetChatUI() {
-        if (chatMessages) chatMessages.innerHTML = '';
-        currentStreamingMsgId = null;
-        setStreamingState(false);
-        if (chatInput) { chatInput.disabled = false; chatInput.value = ''; chatInput.placeholder = 'Ask Hermes anything...'; }
-        if (chatInput) chatInput.style.height = 'auto';
-      }
-
-      // Update chat header title from first user message
-      function updateChatTitle(text) {
-        if (!chatHeaderTitle) return;
-        const preview = text.slice(0, 40);
-        chatHeaderTitle.textContent = preview + (text.length > 40 ? '...' : '');
-      }
-
-      // Format message content (support markdown-ish code blocks + action buttons)
-      function formatMessageContent(text, role) {
-        if (!text) return '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>';
-        let html = escapeHtml(text);
-        // Basic code block formatting — use string concat to avoid backtick issues
-        var bt3 = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
-        html = html.replace(new RegExp(bt3 + '(\\w*)\\n([\\s\\S]*?)' + bt3, 'g'), '<code class="code-block"><pre>$2</pre></code>');
-        // Inline code
-        var bt = String.fromCharCode(96);
-        html = html.replace(new RegExp(bt + '([^' + bt + ']+)' + bt, 'g'), '<code class="inline-code">$1</code>');
-        // Line breaks
-        html = html.replace(/\n/g, '<br>');
-        return html;
-      }
-
-      // After streaming completes, add action buttons for commands and file refs
-      function addActionButtons(msgId, content) {
-        if (!chatMessages) return;
-        var sel = '[data-msg-id="' + msgId + '"]';
-        var bubble = chatMessages.querySelector(sel);
-        if (!bubble) return;
-
-        // Extract hermes commands from content
-        var commands = [];
-        var bt3 = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
-        var codeBlockRegex = new RegExp(bt3 + '(?:sh|bash|shell|terminal)?\\s*\\n([\\s\\S]*?)' + bt3, 'g');
-        var match;
-        while ((match = codeBlockRegex.exec(content)) !== null) {
-          var lines = match[1].trim().split('\\n');
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i].trim().replace(/^\\$\\s*/, '');
-            if (line.startsWith('hermes ')) {
-              commands.push(line);
-            }
-          }
-        }
-        // Inline hermes commands
-        var bt = String.fromCharCode(96);
-        var inlineRegex = new RegExp(bt + '(hermes\\s+[^' + bt + ']+)' + bt, 'g');
-        while ((match = inlineRegex.exec(content)) !== null) {
-          var cmd = match[1].trim();
-          if (commands.indexOf(cmd) === -1) commands.push(cmd);
-        }
-
-        // Extract file references
-        var fileRefs = [];
-        var fileRegex = new RegExp(bt + '([^' + bt + '\\s]+\\.\\w{2,5})(?::(\\d+))?' + bt, 'g');
-        while ((match = fileRegex.exec(content)) !== null) {
-          var fp = match[1];
-          var ln = match[2] ? parseInt(match[2], 10) : undefined;
-          if (fp.indexOf('hermes') === -1 && !commands.some(function(c) { return c.indexOf(fp) !== -1; })) {
-            fileRefs.push({ path: fp, line: ln });
-          }
-        }
-
-        if (commands.length === 0 && fileRefs.length === 0) return;
-
-        var actionBar = document.createElement('div');
-        actionBar.className = 'chat-action-bar';
-
-        for (var ci = 0; ci < commands.length; ci++) {
-          (function(cmd) {
-            var btn = document.createElement('button');
-            btn.className = 'chat-action-btn chat-action-cmd';
-            btn.title = 'Run: ' + cmd;
-            btn.textContent = '\u25B6 ' + cmd;
-            btn.addEventListener('click', function() {
-              vscodeApi.postMessage({ command: 'runChatCommand', command: cmd });
-              btn.classList.add('executed');
-              btn.textContent = '\u2713 ' + cmd;
-            });
-            actionBar.appendChild(btn);
-          })(commands[ci]);
-        }
-
-        for (var fi = 0; fi < fileRefs.length; fi++) {
-          (function(ref) {
-            var btn = document.createElement('button');
-            btn.className = 'chat-action-btn chat-action-file';
-            btn.title = 'Open: ' + ref.path + (ref.line ? ':' + ref.line : '');
-            btn.textContent = '\uD83D\uDCC4 ' + ref.path + (ref.line ? ':' + ref.line : '');
-            btn.addEventListener('click', function() {
-              vscodeApi.postMessage({ command: 'openFileRef', filePath: ref.path, line: ref.line });
-            });
-            actionBar.appendChild(btn);
-          })(fileRefs[fi]);
-        }
-
-        bubble.appendChild(actionBar);
-      }
-
-      // Update connection indicator in chat status bar
-      function updateConnectionIndicator(status) {
-        if (!chatStatusBar || !chatStatusText) return;
-        chatStatusBar.className = 'chat-status-bar ' + status;
-        if (status === 'connected') {
-          chatStatusText.textContent = 'Connected';
-        } else if (status === 'connecting') {
-          chatStatusText.textContent = 'Connecting...';
-        } else if (status === 'error') {
-          chatStatusText.textContent = 'Connection error';
-        } else {
-          chatStatusText.textContent = 'Disconnected';
-        }
-      }
-
-      // Update gateway status indicator in settings
-      function updateGatewayIndicator(data) {
-        var el = document.getElementById('gateway-status');
-        if (!el) return;
-        if (data.available) {
-          el.className = 'gateway-status available';
-          el.textContent = '\u2713 Gateway reachable at ' + (data.url || '');
-        } else {
-          el.className = 'gateway-status unavailable';
-          el.textContent = '\u2717 Gateway not reachable' + (data.error ? ': ' + data.error : '');
-        }
-      }
-
-      // Format timestamp
-      function formatTime(ts) {
-        const d = new Date(ts);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      }
-
-      // Set streaming UI state (buttons, input)
-      function setStreamingState(isStreaming) {
-        if (isStreaming) {
-          if (btnSend) btnSend.classList.add('hidden');
-          if (btnCancel) btnCancel.classList.remove('hidden');
-          if (chatInput) { chatInput.disabled = true; chatInput.placeholder = 'Hermes is thinking...'; }
-        } else {
-          if (btnSend) btnSend.classList.remove('hidden');
-          if (btnCancel) btnCancel.classList.add('hidden');
-          if (chatInput) { chatInput.disabled = false; chatInput.placeholder = 'Ask Hermes anything...'; }
-        }
-      }
-
-      // Chat form — send message
-      if (chatForm) {
-        chatForm.addEventListener('submit', (e) => {
-          e.preventDefault();
-          if (!chatInput) return;
-          const text = chatInput.value.trim();
-          if (!text) return;
-
-          chatInput.value = '';
-          chatInput.style.height = 'auto';
-          vscodeApi.postMessage({ command: 'sendMessage', text, sessionId: activeSessionId });
-          setStreamingState(true);
-          // Track that we have an active session now
-          if (!activeSessionId) {
-            updateChatTitle(text);
-          }
-        });
-      }
-
-      // New chat button
-      document.getElementById('btn-new-chat')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'newChatSession' });
-      });
-
-      // Cancel streaming button
-      if (btnCancel) {
-        btnCancel.addEventListener('click', () => {
-          vscodeApi.postMessage({ command: 'cancelStreaming' });
-        });
-      }
-
-      // Auto-resize textarea
-      if (chatInput) {
-        chatInput.addEventListener('input', () => {
-          chatInput.style.height = 'auto';
-          chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
-        });
-        chatInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            chatForm?.requestSubmit();
-          }
-        });
-      }
-
-      // Quick command buttons
-      document.querySelectorAll('.cmd-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const cmdId = btn.dataset.cmd;
-          btn.classList.add('running');
-          vscodeApi.postMessage({ command: 'executeCommand', commandId: cmdId, args: [] });
-
-          // Create output block for this command
-          const cmdTitle = btn.querySelector('.cmd-label')?.textContent || cmdId;
-          addCommandBlock(cmdId, cmdTitle);
-        });
-      });
-
-      // Custom command input
-      const terminalInput = document.getElementById('terminal-input');
-      const runBtn = document.getElementById('btn-run-command');
-
-      if (runBtn) {
-        runBtn.addEventListener('click', () => {
-          if (terminalInput && terminalInput.value.trim()) {
-            vscodeApi.postMessage({ command: 'executeCustomCommand', input: terminalInput.value.trim() });
-            const inputVal = terminalInput.value.trim();
-            addCommandBlock('custom_' + Date.now(), inputVal);
-            terminalInput.value = '';
-          }
-        });
-      }
-
-      if (terminalInput) {
-        terminalInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && terminalInput.value.trim()) {
-            e.preventDefault();
-            vscodeApi.postMessage({ command: 'executeCustomCommand', input: terminalInput.value.trim() });
-            const inputVal = terminalInput.value.trim();
-            addCommandBlock('custom_' + Date.now(), inputVal);
-            terminalInput.value = '';
-          }
-        });
-      }
-
-      // Clear terminal button
-      document.getElementById('btn-clear-terminal')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'clearTerminal' });
-      });
-
-      // Save settings
-      document.getElementById('btn-save-settings')?.addEventListener('click', () => {
-        const gatewayUrl = document.getElementById('gateway-url').value;
-        const apiKey = document.getElementById('api-key').value;
-        const profile = document.getElementById('profile').value;
-        const transport = document.getElementById('transport')?.value || 'auto';
-        vscodeApi.postMessage({
-          command: 'saveSettings',
-          settings: { gatewayUrl, apiKey, profile, transport }
-        });
-      });
-
-      // Test gateway button
-      document.getElementById('btn-check-gateway')?.addEventListener('click', () => {
-        var el = document.getElementById('gateway-status');
-        if (el) {
-          el.className = 'gateway-status checking';
-          el.textContent = 'Checking...';
-        }
-        vscodeApi.postMessage({ command: 'checkGateway' });
-      });
-
-      // Terminal helper functions
-      function addCommandBlock(id, title) {
-        const block = document.createElement('div');
-        block.className = 'command-block';
-        block.id = 'cmd-' + id;
-        block.innerHTML =
-          '<div class="command-header">' +
-            '<span class="command-title">$ ' + escapeHtml(title) + '</span>' +
-            '<span class="command-status running">\u23F3 Running...</span>' +
-          '</div>' +
-          '<pre class="command-output"></pre>';
-        terminalOutput.appendChild(block);
-        commandOutputs.set(id, block);
-        block.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      }
-
-      function appendTerminalOutput(data) {
-        let block = commandOutputs.get(data.id);
-        if (!block) {
-          addCommandBlock(data.id, data.command || 'command');
-          block = commandOutputs.get(data.id);
-        }
-
-        if (block) {
-          const output = block.querySelector('.command-output');
-          const status = block.querySelector('.command-status');
-
-          if (data.text) {
-            if (output) {
-              output.textContent += data.text;
-            }
-          }
-
-          if (data.exitCode !== undefined) {
-            if (status) {
-              status.className = 'command-status ' + (data.exitCode === 0 ? 'success' : 'error');
-              status.textContent = data.exitCode === 0
-                ? '✓ Done (' + data.duration + 'ms)'
-                : '✗ Failed (code ' + data.exitCode + ')';
-            }
-          }
-
-          block.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-      }
-
-      // File navigation UI handlers
-      const fileList = document.getElementById('file-list');
-      const fileSearchInput = document.getElementById('file-search-input');
-      const openFilesBar = document.getElementById('open-files-bar');
-
-      // Refresh files button
-      document.getElementById('btn-refresh-files')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'listFiles' });
-      });
-
-      // Switch editor buttons
-      document.getElementById('btn-switch-prev')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'switchEditor', direction: 'previous' });
-      });
-      document.getElementById('btn-switch-next')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'switchEditor', direction: 'next' });
-      });
-
-      // Search files input with debounce
-      let searchTimeout = null;
-      if (fileSearchInput) {
-        fileSearchInput.addEventListener('input', () => {
-          clearTimeout(searchTimeout);
-          const query = fileSearchInput.value.trim();
-          if (query.length === 0) {
-            vscodeApi.postMessage({ command: 'listFiles' });
-            return;
-          }
-          searchTimeout = setTimeout(() => {
-            vscodeApi.postMessage({ command: 'searchFiles', query, limit: 20 });
-          }, 300);
-        });
-      }
-
-      // Load files when tab becomes active
-      document.querySelector('[data-tab="files"]')?.addEventListener('click', () => {
-        vscodeApi.postMessage({ command: 'listFiles' });
-        vscodeApi.postMessage({ command: 'getOpenFiles' });
-      });
-
-      // File rendering functions
-      function renderFileList(files) {
-        if (!fileList) return;
-        if (files.length === 0) {
-          fileList.innerHTML = '<div class="empty-state"><p>No files found.</p></div>';
-          return;
-        }
-        fileList.innerHTML = '';
-        for (const f of files) {
-          const item = document.createElement('div');
-          item.className = 'file-item';
-          const icon = getFileIcon(f.fileName);
-          item.innerHTML =
-            '<span class="file-icon">' + icon + '</span>' +
-            '<span class="file-name">' + escapeHtml(f.fileName) + '</span>' +
-            '<span class="file-path">' + escapeHtml(f.relativePath) + '</span>' +
-            '<span class="file-language">' + escapeHtml(f.language || '') + '</span>';
-          item.addEventListener('click', () => {
-            vscodeApi.postMessage({ command: 'openFile', filePath: f.fsPath });
-          });
-          item.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            vscodeApi.postMessage({ command: 'revealInExplorer', filePath: f.fsPath });
-          });
-          fileList.appendChild(item);
-        }
-      }
-
-      function renderOpenFilesBar(files, activeFile) {
-        if (!openFilesBar) return;
-        if (files.length === 0) {
-          openFilesBar.innerHTML = '';
-          return;
-        }
-        openFilesBar.innerHTML = '';
-        for (const f of files) {
-          const tab = document.createElement('button');
-          tab.className = 'file-tab' + (activeFile && activeFile.fsPath === f.fsPath ? ' active' : '');
-          tab.textContent = f.fileName;
-          tab.title = f.relativePath;
-          tab.addEventListener('click', () => {
-            vscodeApi.postMessage({ command: 'openFile', filePath: f.fsPath });
-          });
-          openFilesBar.appendChild(tab);
-        }
-      }
-
-      function getFileIcon(fileName) {
-        var ext = fileName.split('.').pop();
-        if (ext) ext = ext.toLowerCase(); else ext = '';
-        var icons = {
-          ts: 'TS', tsx: '⚛', js: 'JS', jsx: '⚛', py: '🐍',
-          json: '📋', md: '📝', css: '🎨', html: '🌐', yaml: '⚙',
-          yml: '⚙', toml: '⚙', sh: '⚡', dockerfile: '🐳',
-          git: '📦', lock: '🔒', env: '🔑', sql: '🗄',
-        };
-        return icons[ext] || '📄';
-      }
-
-      // Kanban rendering
-      function renderKanban(data) {
-        var container = document.getElementById('kanban-content');
-        if (!container) return;
-        if (typeof data === 'string') {
-          container.innerHTML = '<pre class="kanban-raw">' + escapeHtml(data) + '</pre>';
-          return;
-        }
-        if (data && data.error) {
-          container.innerHTML = '<div class="empty-state"><p>Error loading kanban: ' + escapeHtml(data.error) + '</p></div>';
-          return;
-        }
-        container.innerHTML = '<pre class="kanban-raw">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
-      }
-
-      document.getElementById('btn-refresh-kanban')?.addEventListener('click', function() {
-        var container = document.getElementById('kanban-content');
-        if (container) container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-        vscodeApi.postMessage({ command: 'loadKanban' });
-      });
-
-      // Auto-load kanban on tab click
-      document.querySelector('[data-tab="kanban"]')?.addEventListener('click', function() {
-        vscodeApi.postMessage({ command: 'loadKanban' });
-      });
-
-      // Sessions rendering
-      function renderSessions(sessions) {
-        var container = document.getElementById('sessions-content');
-        if (!container) return;
-        if (!sessions || sessions.length === 0) {
-          container.innerHTML = '<div class="empty-state"><p>No sessions found.</p></div>';
-          return;
-        }
-        container.innerHTML = '';
-        for (var i = 0; i < sessions.length; i++) {
-          var s = sessions[i];
-          var item = document.createElement('div');
-          item.className = 'session-item';
-          item.innerHTML =
-            '<div class="session-title">' + escapeHtml(s.title || 'Untitled') + '</div>' +
-            '<div class="session-meta">' + escapeHtml(s.when || '') + '</div>' +
-            '<div class="session-preview">' + escapeHtml(s.preview || '') + '</div>';
-          container.appendChild(item);
-        }
-      }
-
-      document.getElementById('btn-refresh-sessions')?.addEventListener('click', function() {
-        var container = document.getElementById('sessions-content');
-        if (container) container.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-        vscodeApi.postMessage({ command: 'loadSessions' });
-      });
-
-      // Auto-load sessions on tab click
-      document.querySelector('[data-tab="sessions"]')?.addEventListener('click', function() {
-        vscodeApi.postMessage({ command: 'loadSessions' });
-      });
-
-      function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-      }
-    })();
-  </script>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

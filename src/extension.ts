@@ -96,25 +96,32 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Detect hermes CLI path (once, shared between terminal and chat)
-    terminalService.detectHermesPath().then(path => {
-        console.log(`Hermes CLI detected at: ${path}`);
-        chatService.setHermesPath(path);
-        sidebarProvider.updateChatStatus('ready');
-    }).catch(() => {
-        chatService.detectHermesPath().then(available => {
-            if (available) {
-                sidebarProvider.updateChatStatus('ready');
-            } else {
-                sidebarProvider.updateChatStatus('no-cli');
-            }
-        });
-    });
-
-    // Check gateway availability in background
-    chatService.checkGateway().then(available => {
-        if (available) {
-            console.log(`Hermes gateway available at: ${chatService.getSettings().gatewayUrl}`);
+    // Detect availability of the CLI and the gateway, then report a truthful status.
+    // terminalService.detectHermesPath() also primes the Terminal tab's CLI path.
+    // chatService.detectHermesPath() is the source of truth (true only if hermes is
+    // really in PATH), and checkGateway() reports whether a gateway is reachable.
+    Promise.all([
+        terminalService.detectHermesPath(),
+        chatService.detectHermesPath(),
+        chatService.checkGateway(),
+    ]).then(([, cliAvailable, gatewayAvailable]) => {
+        // Align the Terminal tab on the same target chatService uses
+        // (a remote SSH host, a manual path, or the auto-detected binary).
+        const settings = chatService.getSettings();
+        const ssh = (settings.sshTarget || '').trim();
+        terminalService.setSshConfig({ host: ssh, port: settings.sshPort, user: settings.sshUser, key: settings.sshKey, home: settings.hermesHome });
+        if (ssh) {
+            terminalService.setHermesPath((settings.cliPath || '').trim() || 'hermes');
+        } else if (cliAvailable) {
+            terminalService.setHermesPath(chatService.getHermesPath());
         }
+        console.log(
+            `Hermes target: ${ssh ? 'ssh ' + ssh : (cliAvailable ? chatService.getHermesPath() : 'not found')}, ` +
+            `gateway: ${gatewayAvailable ? settings.gatewayUrl : 'unreachable'}`
+        );
+        const usable = cliAvailable || gatewayAvailable;
+        sidebarProvider.updateChatStatus(usable ? 'ready' : 'no-cli');
+        sidebarProvider.updateConnectionStatus(usable ? 'connected' : 'disconnected');
     });
 
     // Wire terminal service events to sidebar
@@ -263,7 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Hermes Cursor Extension v0.1.0 activated with sidebar, chat, project context, terminal, and file navigation');
+    console.log('Hermes Cursor Extension v0.1.6 activated with sidebar, chat, project context, terminal, and file navigation');
 }
 
 export function deactivate() {

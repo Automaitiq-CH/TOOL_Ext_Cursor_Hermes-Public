@@ -1,10 +1,12 @@
 import { spawn, ChildProcess, exec } from 'child_process';
 import { EventEmitter } from 'events';
 import { promisify } from 'util';
+import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import * as vscode from 'vscode';
 import { ProjectContextService, HermesApiContext } from './projectContext';
+import { buildHermesInvocation, HermesTarget } from './hermesRunner';
 
 export interface ChatMessage {
   id: string;
@@ -27,9 +29,22 @@ export interface ChatSettings {
   gatewayUrl: string;
   profile: string;
   transport: 'auto' | 'gateway' | 'cli';
+  contextMode: 'minimal' | 'workspace' | 'full';
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** Manual path to the hermes binary (or its directory). Overrides PATH auto-detection. */
+  cliPath?: string;
+  /** SSH host/server or ssh alias. When set, hermes runs remotely over SSH. */
+  sshTarget?: string;
+  /** SSH port (default 22). */
+  sshPort?: string;
+  /** SSH username (optional; ssh alias/config used if empty). */
+  sshUser?: string;
+  /** Path to an SSH private key (optional; ssh-agent/default keys if empty). */
+  sshKey?: string;
+  /** HERMES_HOME on the target — selects a specific hermes config/instance. */
+  hermesHome?: string;
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error';
@@ -44,9 +59,10 @@ interface GatewayResponse {
 }
 
 const DEFAULT_SETTINGS: ChatSettings = {
-  gatewayUrl: 'http://localhost:8080',
+  gatewayUrl: '',
   profile: 'default',
   transport: 'auto',
+  contextMode: 'workspace',
   timeoutMs: 120000,
   maxRetries: 2,
 };
@@ -55,6 +71,7 @@ export class ChatService extends EventEmitter {
   private static instance: ChatService | null = null;
   private static readonly STORAGE_KEY = 'hermes.chat.sessions';
   private static readonly ACTIVE_SESSION_KEY = 'hermes.chat.activeSession';
+  private static readonly SETTINGS_KEY = 'hermes.chat.settings.v2';
   private hermesPath: string = 'hermes';
   private activeProcess: ChildProcess | null = null;
   private activeSessionId: string | null = null;
@@ -95,7 +112,7 @@ export class ChatService extends EventEmitter {
       if (activeId && this.sessions.has(activeId)) {
         this.activeSessionId = activeId;
       }
-      const savedSettings = this.storage.get<ChatSettings | undefined>('hermes.chat.settings', undefined);
+      const savedSettings = this.storage.get<ChatSettings | undefined>(ChatService.SETTINGS_KEY, undefined);
       if (savedSettings) {
         this.settings = { ...DEFAULT_SETTINGS, ...savedSettings };
       }
@@ -132,7 +149,7 @@ export class ChatService extends EventEmitter {
   private persistSettings(): void {
     if (!this.storage) return;
     try {
-      this.storage.update('hermes.chat.settings', this.settings);
+      this.storage.update(ChatService.SETTINGS_KEY, this.settings);
     } catch {
       // ignore storage failures
     }
@@ -144,6 +161,7 @@ export class ChatService extends EventEmitter {
 
   public setActiveSession(id: string) {
     this.activeSessionId = id;
+    this.persistSessions();
   }
 
   public getActiveSessionId(): string | null {
@@ -155,7 +173,91 @@ export class ChatService extends EventEmitter {
     this.cliDetected = true;
   }
 
+  public getHermesPath(): string {
+    return this.hermesPath;
+  }
+
+  /**
+   * Apply a manually-configured hermes path. Accepts either the binary path
+   * or a directory containing `hermes`. Returns true if it resolves to an
+   * existing file. Sets cliDetected accordingly.
+   */
+  public async applyCliPath(cliPath: string): Promise<boolean> {
+    const trimmed = (cliPath || '').trim();
+    if (!trimmed) {
+      this.cliDetected = false;
+      return false;
+    }
+    try {
+      let candidate = trimmed;
+      const stat = fs.statSync(candidate);
+      if (stat.isDirectory()) {
+        candidate = trimmed.replace(/[/\\]+$/, '') + '/hermes';
+      }
+      if (fs.existsSync(candidate)) {
+        this.hermesPath = candidate;
+        this.cliDetected = true;
+        return true;
+      }
+    } catch { /* path does not exist or is not accessible */ }
+    this.cliDetected = false;
+    return false;
+  }
+
+  /**
+   * Resolve the current hermes invocation target (local path or remote over SSH).
+   * When an SSH target is set, cliPath is treated as the *remote* hermes path.
+   */
+  public hermesTarget(): HermesTarget {
+    const ssh = (this.settings.sshTarget || '').trim();
+    if (ssh) {
+      return {
+        hermesPath: (this.settings.cliPath || '').trim() || 'hermes',
+        sshTarget: ssh,
+        sshPort: this.settings.sshPort,
+        sshUser: this.settings.sshUser,
+        sshKey: this.settings.sshKey,
+        hermesHome: this.settings.hermesHome,
+      };
+    }
+    return { hermesPath: this.hermesPath, hermesHome: this.settings.hermesHome };
+  }
+
+  public isSshMode(): boolean {
+    return !!(this.settings.sshTarget || '').trim();
+  }
+
+  /**
+   * Verify a remote hermes is reachable by running `hermes version` over SSH.
+   */
+  private checkSshHermes(): Promise<boolean> {
+    const inv = buildHermesInvocation(this.hermesTarget(), ['version']);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.cliDetected = ok;
+        resolve(ok);
+      };
+      const child = spawn(inv.command, inv.args, { env: { ...process.env, ...(inv.env || {}) } });
+      const timer = setTimeout(() => { child.kill('SIGTERM'); finish(false); }, 12000);
+      child.on('close', (code) => finish(code === 0));
+      child.on('error', () => finish(false));
+    });
+  }
+
   public async detectHermesPath(): Promise<boolean> {
+    // Remote hermes over SSH takes priority when configured.
+    if (this.isSshMode()) {
+      return this.checkSshHermes();
+    }
+    // A manually-configured path (from Settings) takes priority over PATH lookup.
+    const manual = (this.settings.cliPath || '').trim();
+    if (manual && await this.applyCliPath(manual)) {
+      return true;
+    }
     try {
       const execAsync = promisify(exec);
       const { stdout } = await execAsync('which hermes 2>/dev/null || where hermes 2>/dev/null');
@@ -192,7 +294,12 @@ export class ChatService extends EventEmitter {
    * Returns true if the gateway responds within 3 seconds.
    */
   public async checkGateway(): Promise<boolean> {
-    const url = this.settings.gatewayUrl.replace(/\/+$/, '') + '/health';
+    const gatewayUrl = (this.settings.gatewayUrl || '').trim();
+    if (!gatewayUrl) {
+      this.gatewayAvailable = false;
+      return false;
+    }
+    const url = gatewayUrl.replace(/\/+$/, '') + '/health';
     try {
       const response = await this.httpRequest('GET', url, undefined, 3000);
       this.gatewayAvailable = response.statusCode >= 200 && response.statusCode < 400;
@@ -212,6 +319,9 @@ export class ChatService extends EventEmitter {
    */
   private resolveTransport(): 'gateway' | 'cli' {
     if (this.settings.transport === 'gateway') {
+      if (!(this.settings.gatewayUrl || '').trim()) {
+        throw new Error('Gateway URL is not configured.');
+      }
       if (this.gatewayAvailable) return 'gateway';
       if (this.cliDetected) return 'cli';
       throw new Error('No transport available: gateway unreachable and CLI not found.');
@@ -285,7 +395,7 @@ export class ChatService extends EventEmitter {
     let apiContext: HermesApiContext | undefined;
     if (this.projectContext) {
       try {
-        apiContext = await this.projectContext.formatForHermesApi();
+        apiContext = await this.projectContext.formatForHermesApi(this.settings.contextMode || 'workspace');
       } catch {
         // context is optional
       }
@@ -306,7 +416,13 @@ export class ChatService extends EventEmitter {
     userMessage: string,
     context?: HermesApiContext
   ): Promise<void> {
-    const url = this.settings.gatewayUrl.replace(/\/+$/, '') + '/v1/chat';
+    const gatewayUrl = (this.settings.gatewayUrl || '').trim();
+    if (!gatewayUrl) {
+      this.finalizeError(sessionId, msgId, 'Gateway URL is not configured.');
+      this.setConnectionStatus('error');
+      return;
+    }
+    const url = gatewayUrl.replace(/\/+$/, '') + '/v1/chat';
     const history = this.getConversationHistory(sessionId, msgId);
 
     const payload: Record<string, any> = {
@@ -422,8 +538,10 @@ export class ChatService extends EventEmitter {
       args.push('--profile', this.settings.profile);
     }
 
-    const child = spawn(this.hermesPath, args, {
-      env: { ...process.env, FORCE_COLOR: '0' },
+    const inv = buildHermesInvocation(this.hermesTarget(), args);
+    const child = spawn(inv.command, inv.args, {
+      cwd: !this.isSshMode() && context?.project.root ? context.project.root : undefined,
+      env: { ...process.env, ...(inv.env || {}), FORCE_COLOR: '0' },
     });
 
     this.activeProcess = child;
@@ -551,6 +669,9 @@ export class ChatService extends EventEmitter {
       const g = ctx.git;
       lines.push(`Git: ${g.branch} (+${g.ahead}/-${g.behind}, ${g.staged} staged, ${g.unstaged} unstaged)`);
     }
+    if (ctx.contextAccess) {
+      lines.push(`Context access: ${ctx.contextAccess.description}`);
+    }
     if (ctx.keyFiles.length > 0) {
       lines.push(`Key files: ${ctx.keyFiles.map(f => f.relativePath).join(', ')}`);
     }
@@ -563,6 +684,13 @@ export class ChatService extends EventEmitter {
     if (ctx.activeSelection) {
       const preview = ctx.activeSelection.length > 500 ? ctx.activeSelection.slice(0, 500) + '...' : ctx.activeSelection;
       lines.push(`Selection:\n${preview}`);
+    }
+    if (ctx.workspaceFiles && ctx.workspaceFiles.length > 0) {
+      lines.push(`Workspace file index (${ctx.workspaceFiles.length} files):`);
+      lines.push(ctx.workspaceFiles.slice(0, 1000).map(f => `  - ${f}`).join('\n'));
+    }
+    if (ctx.contextAccess?.allowWorkspaceRead && ctx.project.root) {
+      lines.push(`Workspace read permission: The user selected Full project mode. You may inspect files under ${ctx.project.root} when needed. Do not read files outside the workspace unless the user explicitly asks.`);
     }
     return lines.join('\n');
   }
@@ -708,8 +836,9 @@ export class ChatService extends EventEmitter {
     if (!this.cliDetected) return [];
 
     return new Promise((resolve) => {
-      const child = spawn(this.hermesPath, ['sessions', 'list'], {
-        env: { ...process.env },
+      const inv = buildHermesInvocation(this.hermesTarget(), ['sessions', 'list']);
+      const child = spawn(inv.command, inv.args, {
+        env: { ...process.env, ...(inv.env || {}) },
       });
 
       let stdout = '';
