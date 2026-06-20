@@ -11,7 +11,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes"
+    "url": "https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -29,12 +29,12 @@
   "badges": [
     {
       "url": "https://img.shields.io/badge/version-0.1.6-blue.svg",
-      "href": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes",
+      "href": "https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public",
       "description": "Version 0.1.6"
     }
   ],
   "preview": true,
-  "qna": "https://github.com/Automaitiq/TOOL_Ext_Cursor_Hermes/issues",
+  "qna": "https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public/issues",
   "keywords": [
     "hermes",
     "ai",
