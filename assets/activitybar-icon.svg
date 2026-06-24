@@ -1,20 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-  <defs>
-    <mask id="h-cutout">
-      <rect width="24" height="24" fill="white"/>
-      <rect x="10.5" y="9.7" width=".75" height="4" rx=".25" fill="black"/>
-      <rect x="12.75" y="9.7" width=".75" height="4" rx=".25" fill="black"/>
-      <rect x="10.5" y="11.35" width="3" height=".75" rx=".25" fill="black"/>
-    </mask>
-  </defs>
-  <g fill="currentColor">
-    <path d="M11 11.2C8.8 8.6 5.8 6.5 2.4 5.1c.9 2.2 2.7 4.2 5.3 5.7l3.3 1.9z"/>
-    <path d="M10.4 13.1C8 11.4 5.2 10 2.3 9.1c1.4 1.9 3.5 3.3 6.1 4.3l2 .8z" opacity=".72"/>
-    <path d="M13 11.2c2.2-2.6 5.2-4.7 8.6-6.1-.9 2.2-2.7 4.2-5.3 5.7L13 12.7z"/>
-    <path d="M13.6 13.1c2.4-1.7 5.2-3.1 8.1-4-1.4 1.9-3.5 3.3-6.1 4.3l-2 .8z" opacity=".72"/>
-    <circle cx="12" cy="11.7" r="3.2" mask="url(#h-cutout)"/>
-    <circle cx="10.7" cy="17.2" r=".55"/>
-    <circle cx="12" cy="17.2" r=".65"/>
-    <circle cx="13.3" cy="17.2" r=".55"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
+  <!-- Monochrome icon for the VS Code activity bar: single color, transparent
+       background, so the editor tints it to match the theme. -->
+  <!-- Left wing -->
+  <path d="M108 120 C88 95, 58 68, 28 48 C38 68, 52 88, 70 105 L108 120Z" opacity="0.85"/>
+  <path d="M104 128 C80 108, 52 88, 24 72 C36 88, 52 104, 72 116 L104 128Z" opacity="0.6"/>
+  <path d="M100 136 C78 120, 54 106, 32 94 C42 106, 56 118, 74 128 L100 136Z" opacity="0.4"/>
+  <!-- Right wing -->
+  <path d="M148 120 C168 95, 198 68, 228 48 C218 68, 204 88, 186 105 L148 120Z" opacity="0.85"/>
+  <path d="M152 128 C176 108, 204 88, 232 72 C220 88, 204 104, 184 116 L152 128Z" opacity="0.6"/>
+  <path d="M156 136 C178 120, 202 106, 224 94 C214 106, 200 118, 182 128 L156 136Z" opacity="0.4"/>
+  <!-- Core orb -->
+  <circle cx="128" cy="120" r="36" opacity="0.35"/>
+  <!-- H lettermark (geometric, renders reliably at small sizes) -->
+  <rect x="112" y="100" width="8" height="40" rx="1"/>
+  <rect x="136" y="100" width="8" height="40" rx="1"/>
+  <rect x="112" y="116" width="32" height="8" rx="1"/>
+  <!-- Dots -->
+  <circle cx="116" cy="174" r="3.5" opacity="0.7"/>
+  <circle cx="128" cy="174" r="4"/>
+  <circle cx="140" cy="174" r="3.5" opacity="0.7"/>
 </svg>

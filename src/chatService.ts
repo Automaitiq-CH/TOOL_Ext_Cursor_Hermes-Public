@@ -49,6 +49,15 @@ export interface ChatSettings {
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error';
 
+export interface SendOptions {
+  /** Profile override for this message (falls back to settings.profile). */
+  profile?: string;
+  /** Model override for this message (passed as `-m`). */
+  model?: string;
+  /** Files attached to this message; their content is injected into the prompt. */
+  files?: Array<{ name: string; content: string }>;
+}
+
 interface GatewayResponse {
   success: boolean;
   data?: {
@@ -338,7 +347,7 @@ export class ChatService extends EventEmitter {
 
   // --- Chat ---
 
-  public async sendMessage(userMessage: string): Promise<void> {
+  public async sendMessage(userMessage: string, options?: SendOptions): Promise<void> {
     if (this.activeProcess || this.abortController) {
       this.emit('error', { message: 'A request is already in progress. Please wait or cancel first.' });
       return;
@@ -402,10 +411,20 @@ export class ChatService extends EventEmitter {
     }
 
     if (transport === 'gateway') {
-      await this.sendViaGateway(sessionKey, assistantId, userMessage, apiContext);
+      await this.sendViaGateway(sessionKey, assistantId, userMessage, apiContext, options);
     } else {
-      this.sendViaCli(sessionKey, assistantId, userMessage, apiContext);
+      this.sendViaCli(sessionKey, assistantId, userMessage, apiContext, options);
     }
+  }
+
+  /** Build an "[Attached Files]" prompt section from attachments. */
+  private formatAttachments(files?: Array<{ name: string; content: string }>): string {
+    if (!files || files.length === 0) return '';
+    const blocks = files.map(f => {
+      const body = f.content.length > 100000 ? f.content.slice(0, 100000) + '\n…(truncated)' : f.content;
+      return `--- ${f.name} ---\n${body}`;
+    });
+    return '[Attached Files]\n' + blocks.join('\n\n');
   }
 
   // --- Gateway transport ---
@@ -414,7 +433,8 @@ export class ChatService extends EventEmitter {
     sessionId: string,
     msgId: string,
     userMessage: string,
-    context?: HermesApiContext
+    context?: HermesApiContext,
+    options?: SendOptions
   ): Promise<void> {
     const gatewayUrl = (this.settings.gatewayUrl || '').trim();
     if (!gatewayUrl) {
@@ -428,9 +448,15 @@ export class ChatService extends EventEmitter {
     const payload: Record<string, any> = {
       message: userMessage,
       session_id: sessionId,
-      profile: this.settings.profile,
+      profile: (options?.profile || this.settings.profile),
       history,
     };
+    if (options?.model) {
+      payload.model = options.model;
+    }
+    if (options?.files && options.files.length > 0) {
+      payload.files = options.files;
+    }
     if (context) {
       payload.context = context;
     }
@@ -511,31 +537,32 @@ export class ChatService extends EventEmitter {
     sessionId: string,
     msgId: string,
     userMessage: string,
-    context?: HermesApiContext
+    context?: HermesApiContext,
+    options?: SendOptions
   ): void {
     this.streamingBuffer = '';
-    let enrichedPrompt = userMessage;
     const historyParts = this.getConversationHistoryText(sessionId, msgId);
+    const attachments = this.formatAttachments(options?.files);
 
+    const parts: string[] = [];
     if (context) {
-      try {
-        const summary = this.formatContextAsText(context);
-        const sections = ['[Project Context]', summary];
-        if (historyParts.length > 0) {
-          sections.push('', '[Conversation History]', historyParts);
-        }
-        sections.push('', '[User Query]', userMessage);
-        enrichedPrompt = sections.join('\n');
-      } catch {
-        // proceed with original message
-      }
-    } else if (historyParts.length > 0) {
-      enrichedPrompt = '[Conversation History]\n' + historyParts + '\n\n[User Query]\n' + userMessage;
+      try { parts.push('[Project Context]\n' + this.formatContextAsText(context)); } catch { /* skip */ }
+    }
+    if (attachments) parts.push(attachments);
+    if (historyParts.length > 0) parts.push('[Conversation History]\n' + historyParts);
+    let enrichedPrompt = userMessage;
+    if (parts.length > 0) {
+      enrichedPrompt = parts.join('\n\n') + '\n\n[User Query]\n' + userMessage;
     }
 
     const args = ['chat', '-q', enrichedPrompt, '--quiet'];
-    if (this.settings.profile && this.settings.profile !== 'default') {
-      args.push('--profile', this.settings.profile);
+    const profile = (options?.profile || this.settings.profile || '').trim();
+    if (profile && profile !== 'default') {
+      args.push('--profile', profile);
+    }
+    const model = (options?.model || '').trim();
+    if (model) {
+      args.push('-m', model);
     }
 
     const inv = buildHermesInvocation(this.hermesTarget(), args);
@@ -894,6 +921,45 @@ export class ChatService extends EventEmitter {
 
   public getSessions(): ChatSession[] {
     return Array.from(this.sessions.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * List hermes profiles on the active target (local or over SSH).
+   */
+  public listProfiles(): Promise<Array<{ name: string; model: string; active: boolean }>> {
+    const inv = buildHermesInvocation(this.hermesTarget(), ['profile', 'list']);
+    return new Promise((resolve) => {
+      let out = '';
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(this.parseProfiles(out));
+      };
+      const child = spawn(inv.command, inv.args, { env: { ...process.env, ...(inv.env || {}) } });
+      const timer = setTimeout(() => { child.kill('SIGTERM'); finish(); }, 10000);
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+      child.on('close', finish);
+      child.on('error', () => finish());
+    });
+  }
+
+  private parseProfiles(output: string): Array<{ name: string; model: string; active: boolean }> {
+    const results: Array<{ name: string; model: string; active: boolean }> = [];
+    for (const raw of output.split('\n')) {
+      // Strip ANSI colour codes, then normalise.
+      const line = raw.replace(new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g"), "");
+      const t = line.trim();
+      if (!t || t.startsWith('Profile') || /^[\s─\-—=]+$/.test(t)) continue;
+      const active = t.startsWith('◆');
+      const cleaned = t.replace(/^◆\s*/, '');
+      const cols = cleaned.split(/\s{2,}/).map(c => c.trim()).filter(Boolean);
+      const name = cols[0] || '';
+      if (!name || name.includes('://')) continue;
+      results.push({ name, model: cols[1] || '', active });
+    }
+    return results;
   }
 
   public isStreaming(): boolean {

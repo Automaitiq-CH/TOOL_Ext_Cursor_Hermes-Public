@@ -14,6 +14,8 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
   // The webview can resolve after these are first emitted, so we must re-send.
   private lastChatStatus: 'ready' | 'no-cli' | 'connecting' | null = null;
   private lastConnectionStatus: string | null = null;
+  // Files attached to the next chat message (picked via the composer).
+  private pendingAttachments: Array<{ name: string; content: string }> = [];
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -96,7 +98,16 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           this.handleSwitchEditor(message.direction);
           break;
         case 'sendMessage':
-          this.handleSendMessage(message.text, message.sessionId);
+          this.handleSendMessage(message.text, message.sessionId, { profile: message.profile, model: message.model });
+          break;
+        case 'loadProfiles':
+          this.handleLoadProfiles();
+          break;
+        case 'pickFiles':
+          this.handlePickFiles();
+          break;
+        case 'removeAttachment':
+          this.handleRemoveAttachment(message.name);
           break;
         case 'saveSettings':
           this.handleSaveSettings(message.settings);
@@ -216,7 +227,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
 
   // --- Chat handlers ---
 
-  public async handleSendMessage(text: string, sessionId?: string) {
+  public async handleSendMessage(text: string, sessionId?: string, options?: { profile?: string; model?: string }) {
     if (!this.chatService) {
       console.error('Chat service not initialized');
       return;
@@ -225,11 +236,62 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       if (sessionId) {
         this.chatService.setActiveSession(sessionId);
       }
-      await this.chatService.sendMessage(text);
+      // Consume any pending attachments for this message.
+      const files = this.pendingAttachments.length ? this.pendingAttachments.slice() : undefined;
+      this.pendingAttachments = [];
+      this.view?.webview.postMessage({ command: 'attachedFiles', files: [] });
+      await this.chatService.sendMessage(text, { profile: options?.profile, model: options?.model, files });
     } catch (err) {
       console.error('Failed to send chat message:', err);
       this.view?.webview.postMessage({ command: 'chatError', message: String(err) });
     }
+  }
+
+  private async handleLoadProfiles() {
+    if (!this.chatService || !this.view) return;
+    try {
+      const profiles = await this.chatService.listProfiles();
+      this.view.webview.postMessage({ command: 'profilesData', profiles });
+    } catch {
+      this.view.webview.postMessage({ command: 'profilesData', profiles: [] });
+    }
+  }
+
+  private async handlePickFiles() {
+    if (!this.view) return;
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      openLabel: 'Attach to Hermes',
+    });
+    if (!uris || uris.length === 0) return;
+    for (const uri of uris) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        if (bytes.length > 500000) {
+          this.view.webview.postMessage({ command: 'chatError', message: `File too large to attach: ${uri.fsPath}` });
+          continue;
+        }
+        const content = Buffer.from(bytes).toString('utf8');
+        const name = uri.path.split('/').pop() || uri.fsPath;
+        if (!this.pendingAttachments.some(a => a.name === name)) {
+          this.pendingAttachments.push({ name, content });
+        }
+      } catch {
+        this.view.webview.postMessage({ command: 'chatError', message: `Could not read file: ${uri.fsPath}` });
+      }
+    }
+    this.view.webview.postMessage({
+      command: 'attachedFiles',
+      files: this.pendingAttachments.map(a => ({ name: a.name })),
+    });
+  }
+
+  private handleRemoveAttachment(name: string) {
+    this.pendingAttachments = this.pendingAttachments.filter(a => a.name !== name);
+    this.view?.webview.postMessage({
+      command: 'attachedFiles',
+      files: this.pendingAttachments.map(a => ({ name: a.name })),
+    });
   }
 
   private async handleSaveSettings(settings: { gatewayUrl?: string; apiKey?: string; profile?: string; transport?: string; contextMode?: string; cliPath?: string; sshTarget?: string; sshPort?: string; sshUser?: string; sshKey?: string; hermesHome?: string }) {
@@ -624,6 +686,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <div id="chat-messages" class="chat-messages"></div>
           <div id="chat-input-area" class="chat-input-area">
+            <div id="attach-chips" class="attach-chips"></div>
             <form id="chat-form" class="chat-form">
               <textarea
                 id="chat-input"
@@ -635,6 +698,13 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
               <button type="submit" id="btn-send" class="btn-send" title="Send">&#9654;</button>
               <button type="button" id="btn-cancel" class="btn-cancel hidden" title="Cancel">&#9585;</button>
             </form>
+            <div class="composer-toolbar">
+              <button type="button" id="btn-attach" class="composer-btn" title="Attach files">&#128206;</button>
+              <select id="composer-profile" class="composer-select" title="Hermes profile">
+                <option value="default">default</option>
+              </select>
+              <input id="composer-model" class="composer-model" type="text" placeholder="model (optional)" title="Model override (-m)" autocomplete="off" />
+            </div>
             <div class="chat-hint">Press Enter to send, Shift+Enter for new line</div>
           </div>
         </div>
@@ -832,7 +902,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     </main>
 
     <footer class="sidebar-footer">
-      <span>v0.1.6</span>
+      <span>v0.2.0</span>
       <a href="#" id="btn-open-docs" target="_blank">Docs</a>
     </footer>
   </div>

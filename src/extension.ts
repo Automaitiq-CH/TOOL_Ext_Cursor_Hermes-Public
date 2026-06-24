@@ -270,7 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Hermes Cursor Extension v0.1.6 activated with sidebar, chat, project context, terminal, and file navigation');
+    console.log('Hermes Cursor Extension v0.2.0 activated with sidebar, chat, project context, terminal, and file navigation');
 }
 
 export function deactivate() {

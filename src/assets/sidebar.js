@@ -97,6 +97,14 @@
         if (command === 'settingsData') {
           populateSettings(event.data.settings);
         }
+        // Composer: list of hermes profiles
+        if (command === 'profilesData') {
+          renderProfiles(event.data.profiles);
+        }
+        // Composer: attached files changed
+        if (command === 'attachedFiles') {
+          renderAttachChips(event.data.files);
+        }
         // Result of resolving the manual CLI path
         if (command === 'cliPathStatus') {
           updateCliPathIndicator(event.data);
@@ -164,6 +172,7 @@
             chatStatusBar.classList.add('ready');
           }
           chatInitialized = true;
+          loadComposerProfiles();
         } else {
           // Not reachable. Keep the welcome screen with an explanation, unless
           // the chat area is already open (don't yank it away mid-session).
@@ -534,12 +543,66 @@
 
           chatInput.value = '';
           chatInput.style.height = 'auto';
-          vscodeApi.postMessage({ command: 'sendMessage', text, sessionId: activeSessionId });
+          var profileEl = document.getElementById('composer-profile');
+          var modelEl = document.getElementById('composer-model');
+          vscodeApi.postMessage({
+            command: 'sendMessage',
+            text,
+            sessionId: activeSessionId,
+            profile: profileEl ? profileEl.value : undefined,
+            model: modelEl ? modelEl.value.trim() : undefined,
+          });
           setStreamingState(true);
           // Track that we have an active session now
           if (!activeSessionId) {
             updateChatTitle(text);
           }
+        });
+      }
+
+      // Composer: attach files
+      document.getElementById('btn-attach')?.addEventListener('click', () => {
+        vscodeApi.postMessage({ command: 'pickFiles' });
+      });
+
+      // Load profiles into the composer selector
+      function loadComposerProfiles() {
+        vscodeApi.postMessage({ command: 'loadProfiles' });
+      }
+
+      function renderProfiles(profiles) {
+        var sel = document.getElementById('composer-profile');
+        if (!sel || !profiles || profiles.length === 0) return;
+        var current = sel.value;
+        sel.innerHTML = '';
+        for (var i = 0; i < profiles.length; i++) {
+          var opt = document.createElement('option');
+          opt.value = profiles[i].name;
+          opt.textContent = profiles[i].model ? (profiles[i].name + ' · ' + profiles[i].model) : profiles[i].name;
+          sel.appendChild(opt);
+        }
+        // Keep previous selection, else pick the active profile.
+        var active = profiles.find(function(p){ return p.active; });
+        sel.value = profiles.some(function(p){ return p.name === current; }) ? current : (active ? active.name : profiles[0].name);
+      }
+
+      function renderAttachChips(files) {
+        var box = document.getElementById('attach-chips');
+        if (!box) return;
+        box.innerHTML = '';
+        (files || []).forEach(function(f) {
+          var chip = document.createElement('span');
+          chip.className = 'attach-chip';
+          chip.innerHTML = '<span class="attach-chip-name">\u{1F4CE} ' + escapeHtml(f.name) + '</span>';
+          var x = document.createElement('button');
+          x.className = 'attach-chip-x';
+          x.type = 'button';
+          x.textContent = '×';
+          x.addEventListener('click', function() {
+            vscodeApi.postMessage({ command: 'removeAttachment', name: f.name });
+          });
+          chip.appendChild(x);
+          box.appendChild(chip);
         });
       }
 
