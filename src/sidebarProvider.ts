@@ -103,6 +103,9 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
         case 'loadProfiles':
           this.handleLoadProfiles();
           break;
+        case 'loadModels':
+          this.handleLoadModels();
+          break;
         case 'pickFiles':
           this.handlePickFiles();
           break;
@@ -254,6 +257,16 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ command: 'profilesData', profiles });
     } catch {
       this.view.webview.postMessage({ command: 'profilesData', profiles: [] });
+    }
+  }
+
+  private async handleLoadModels() {
+    if (!this.chatService || !this.view) return;
+    try {
+      const groups = await this.chatService.listModels();
+      this.view.webview.postMessage({ command: 'modelsData', groups });
+    } catch {
+      this.view.webview.postMessage({ command: 'modelsData', groups: [] });
     }
   }
 
@@ -703,7 +716,9 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
               <select id="composer-profile" class="composer-select" title="Hermes profile">
                 <option value="default">default</option>
               </select>
-              <input id="composer-model" class="composer-model" type="text" placeholder="model (optional)" title="Model override (-m)" autocomplete="off" />
+              <select id="composer-model" class="composer-model" title="Model override (-m) — empty uses the profile's model">
+                <option value="">model: profile default</option>
+              </select>
             </div>
             <div class="chat-hint">Press Enter to send, Shift+Enter for new line</div>
           </div>
@@ -902,7 +917,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     </main>
 
     <footer class="sidebar-footer">
-      <span>v0.2.0</span>
+      <span>v0.2.1</span>
       <a href="#" id="btn-open-docs" target="_blank">Docs</a>
     </footer>
   </div>

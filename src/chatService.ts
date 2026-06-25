@@ -6,7 +6,33 @@ import * as http from 'http';
 import * as https from 'https';
 import * as vscode from 'vscode';
 import { ProjectContextService, HermesApiContext } from './projectContext';
-import { buildHermesInvocation, HermesTarget } from './hermesRunner';
+import { buildHermesInvocation, buildInvocation, HermesTarget } from './hermesRunner';
+
+// Python helper (runs where hermes lives) that emits the model catalogue as
+// grouped JSON: [{label, models:[id,...]}]. Reads hermes' JSON model caches.
+const MODEL_ASSEMBLER_PY = [
+  'import json,os',
+  'H=os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")',
+  'g=[]',
+  'def pretty(s):',
+  '  return s.replace("-"," ").replace("_"," ").title()',
+  'try:',
+  '  pm=json.load(open(os.path.join(H,"provider_models_cache.json")))',
+  '  for pid,v in pm.items():',
+  '    ms=v.get("models") if isinstance(v,dict) else (v if isinstance(v,list) else [])',
+  '    ids=[m if isinstance(m,str) else (m.get("id") or m.get("slug")) for m in (ms or [])]',
+  '    ids=[i for i in ids if i][:80]',
+  '    if ids: g.append({"label":pretty(pid),"models":ids})',
+  'except Exception: pass',
+  'try:',
+  '  mc=json.load(open(os.path.join(H,"cache","model_catalog.json")))',
+  '  for pid,p in (mc.get("providers") or {}).items():',
+  '    lbl=(p.get("metadata") or {}).get("display_name") or pretty(pid)',
+  '    ids=[m.get("id") for m in (p.get("models") or []) if isinstance(m,dict) and m.get("id")][:80]',
+  '    if ids: g.append({"label":lbl,"models":ids})',
+  'except Exception: pass',
+  'print(json.dumps(g))',
+].join('\n');
 
 export interface ChatMessage {
   id: string;
@@ -960,6 +986,37 @@ export class ChatService extends EventEmitter {
       results.push({ name, model: cols[1] || '', active });
     }
     return results;
+  }
+
+  /**
+   * List available models on the target, grouped by provider, by running a
+   * small Python helper where hermes lives. Returns [] if unavailable.
+   */
+  public listModels(): Promise<Array<{ label: string; models: string[] }>> {
+    const inv = buildInvocation(this.hermesTarget(), 'python3', ['-c', MODEL_ASSEMBLER_PY]);
+    return new Promise((resolve) => {
+      let out = '';
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          const a = out.indexOf('[');
+          const b = out.lastIndexOf(']');
+          const json = a >= 0 && b > a ? out.slice(a, b + 1) : '[]';
+          const parsed = JSON.parse(json);
+          resolve(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          resolve([]);
+        }
+      };
+      const child = spawn(inv.command, inv.args, { env: { ...process.env, ...(inv.env || {}) } });
+      const timer = setTimeout(() => { child.kill('SIGTERM'); finish(); }, 12000);
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+      child.on('close', finish);
+      child.on('error', () => finish());
+    });
   }
 
   public isStreaming(): boolean {

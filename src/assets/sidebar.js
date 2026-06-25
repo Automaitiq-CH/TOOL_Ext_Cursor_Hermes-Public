@@ -101,6 +101,10 @@
         if (command === 'profilesData') {
           renderProfiles(event.data.profiles);
         }
+        // Composer: grouped model catalogue
+        if (command === 'modelsData') {
+          renderModels(event.data.groups);
+        }
         // Composer: attached files changed
         if (command === 'attachedFiles') {
           renderAttachChips(event.data.files);
@@ -173,6 +177,7 @@
           }
           chatInitialized = true;
           loadComposerProfiles();
+          loadComposerModels();
         } else {
           // Not reachable. Keep the welcome screen with an explanation, unless
           // the chat area is already open (don't yank it away mid-session).
@@ -568,6 +573,35 @@
       // Load profiles into the composer selector
       function loadComposerProfiles() {
         vscodeApi.postMessage({ command: 'loadProfiles' });
+      }
+
+      // Load models into the composer selector
+      function loadComposerModels() {
+        vscodeApi.postMessage({ command: 'loadModels' });
+      }
+
+      function renderModels(groups) {
+        var sel = document.getElementById('composer-model');
+        if (!sel || !groups || groups.length === 0) return;
+        var current = sel.value;
+        sel.innerHTML = '';
+        var def = document.createElement('option');
+        def.value = '';
+        def.textContent = 'model: profile default';
+        sel.appendChild(def);
+        for (var i = 0; i < groups.length; i++) {
+          var grp = document.createElement('optgroup');
+          grp.label = groups[i].label;
+          var ms = groups[i].models || [];
+          for (var j = 0; j < ms.length; j++) {
+            var opt = document.createElement('option');
+            opt.value = ms[j];
+            opt.textContent = ms[j];
+            grp.appendChild(opt);
+          }
+          sel.appendChild(grp);
+        }
+        sel.value = current; // keep selection if still present (else falls back to '')
       }
 
       function renderProfiles(profiles) {

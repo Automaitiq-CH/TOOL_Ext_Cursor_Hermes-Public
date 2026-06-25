@@ -34,12 +34,17 @@ export function shellQuote(s: string): string {
  * Build the [command, args] pair to pass to child_process.spawn for a given
  * hermes argv (e.g. ['chat', '-q', prompt, '--quiet']).
  */
-export function buildHermesInvocation(
+/**
+ * Build the [command, args] to run an arbitrary command on the target (local or
+ * over SSH), with HERMES_HOME applied. Used for both `hermes` and helper tools
+ * like `python3` that need to run where hermes lives.
+ */
+export function buildInvocation(
   target: HermesTarget,
-  hermesArgs: string[]
+  command: string,
+  cmdArgs: string[]
 ): { command: string; args: string[]; env?: Record<string, string> } {
   const host = (target.sshTarget || '').trim();
-  const bin = (target.hermesPath || '').trim() || 'hermes';
   const home = (target.hermesHome || '').trim();
 
   if (host) {
@@ -48,7 +53,7 @@ export function buildHermesInvocation(
     if (home) {
       tokens.push('HERMES_HOME=' + shellQuote(home));
     }
-    tokens.push(...[bin, ...hermesArgs].map(shellQuote));
+    tokens.push(...[command, ...cmdArgs].map(shellQuote));
     const remoteCmd = tokens.join(' ');
 
     const sshArgs = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8'];
@@ -69,5 +74,13 @@ export function buildHermesInvocation(
 
   // Local: pass HERMES_HOME via the child's environment.
   const env = home ? { HERMES_HOME: home } : undefined;
-  return { command: bin, args: hermesArgs, env };
+  return { command, args: cmdArgs, env };
+}
+
+export function buildHermesInvocation(
+  target: HermesTarget,
+  hermesArgs: string[]
+): { command: string; args: string[]; env?: Record<string, string> } {
+  const bin = (target.hermesPath || '').trim() || 'hermes';
+  return buildInvocation(target, bin, hermesArgs);
 }

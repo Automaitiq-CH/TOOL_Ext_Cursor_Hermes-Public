@@ -2,7 +2,7 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent for Cursor & VS Code",
   "description": "Integrate Hermes Agent directly into your Cursor editor — manage kanban tasks, search sessions, run skills, and more.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "automaitiq",
   "author": {
     "name": "Automaitiq",
@@ -28,9 +28,9 @@
   ],
   "badges": [
     {
-      "url": "https://img.shields.io/badge/version-0.2.0-blue.svg",
+      "url": "https://img.shields.io/badge/version-0.2.1-blue.svg",
       "href": "https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public",
-      "description": "Version 0.2.0"
+      "description": "Version 0.2.1"
     }
   ],
   "preview": true,
