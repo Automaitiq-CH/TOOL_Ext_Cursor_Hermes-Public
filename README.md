@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public/releases"><img src="https://img.shields.io/badge/version-0.2.1-blue.svg" alt="Version" /></a>
+  <a href="https://github.com/Automaitiq-CH/TOOL_Ext_Cursor_Hermes-Public/releases"><img src="https://img.shields.io/badge/version-0.2.2-blue.svg" alt="Version" /></a>
   <a href="https://code.visualstudio.com/updates/v1_85"><img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blueviolet.svg" alt="VS Code" /></a>
   <a href="https://cursor.com"><img src="https://img.shields.io/badge/Cursor-compatible-green.svg" alt="Cursor" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>

@@ -917,7 +917,7 @@ export class HermesSidebarProvider implements vscode.WebviewViewProvider {
     </main>
 
     <footer class="sidebar-footer">
-      <span>v0.2.1</span>
+      <span>v0.2.2</span>
       <a href="#" id="btn-open-docs" target="_blank">Docs</a>
     </footer>
   </div>

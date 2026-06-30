@@ -623,9 +623,17 @@ export class ChatService extends EventEmitter {
     });
 
     child.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text && !text.match(/^(DEPRECATION|Warning:)/)) {
-        this.emit('error', { message: text });
+      // Hermes prints informational lines (session ids, deprecation notices)
+      // to stderr — don't surface those as chat errors. Only emit real errors.
+      const lines = data.toString().split('\n')
+        .map(l => l.trim())
+        .filter(l =>
+          l &&
+          !/^(DEPRECATION|Warning:|session_id:|Session:)/i.test(l) &&
+          !/^20\d{6}_\d{6}_\w+$/.test(l)
+        );
+      if (lines.length > 0) {
+        this.emit('error', { message: lines.join('\n') });
       }
     });
 
